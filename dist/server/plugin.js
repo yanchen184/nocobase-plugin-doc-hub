@@ -245,11 +245,12 @@ class PluginDocHubServer extends import_server.Plugin {
     // 從環境變數讀取（請在 docker-compose.yml 或 .env 中設定）
     const GITHUB_TOKEN = process.env.DOCHUB_GITHUB_TOKEN || '';
     const GITLAB_TOKEN = process.env.DOCHUB_GITLAB_TOKEN || '';
-    const GITLAB_HOST = process.env.DOCHUB_GITLAB_HOST || '';
+    const GITLAB_HOST = process.env.DOCHUB_GITLAB_HOST || '10.1.2.191';
 
     // 判斷是否為 GitLab（repo 格式：host/namespace/project 或純 namespace/project）
     function isGitLab(repo) {
-      return repo && (repo.startsWith(GITLAB_HOST) || repo.startsWith('https://' + GITLAB_HOST));
+      if (!repo || !GITLAB_HOST) return false;
+      return repo.startsWith(GITLAB_HOST) || repo.startsWith('https://' + GITLAB_HOST);
     }
 
     // 統一拉取介面：回傳 { content(base64), sha, name }
