@@ -571,6 +571,43 @@ function DocSidebar(props){
   );
 }
 
+// ── ResizableTitle ───────────────────────────────────────────────────────────
+function ResizableTitle(props){
+  var onResize=props.onResize,width=props.width,children=props.children,style=props.style;
+  var rest={};
+  Object.keys(props).forEach(function(k){
+    if(k!=='onResize'&&k!=='width')rest[k]=props[k];
+  });
+  if(!onResize)return h('th',rest,children);
+  function handleMouseDown(e){
+    e.preventDefault();
+    var startX=e.clientX;
+    var startW=width||100;
+    function onMouseMove(ev){
+      var newW=Math.max(60,startW+(ev.clientX-startX));
+      onResize(newW);
+    }
+    function onMouseUp(){
+      document.removeEventListener('mousemove',onMouseMove);
+      document.removeEventListener('mouseup',onMouseUp);
+    }
+    document.addEventListener('mousemove',onMouseMove);
+    document.addEventListener('mouseup',onMouseUp);
+  }
+  return h('th',Object.assign({},rest,{style:Object.assign({},style,{position:'relative'})}),
+    children,
+    h('div',{
+      onClick:function(e){e.stopPropagation();},
+      onMouseDown:handleMouseDown,
+      style:{position:'absolute',right:0,top:0,bottom:0,width:6,cursor:'col-resize',
+        background:'transparent',zIndex:1,userSelect:'none',
+        borderRight:'2px solid transparent',transition:'border-color 0.15s'},
+      onMouseEnter:function(e){e.currentTarget.style.borderRightColor='#1677ff';},
+      onMouseLeave:function(e){e.currentTarget.style.borderRightColor='transparent';}
+    })
+  );
+}
+
 // ── ListPage ─────────────────────────────────────────────────────────────────
 function ListPage(){
   var _s=useState('');var search=_s[0];var setSearch=_s[1];
@@ -644,6 +681,11 @@ function ListPage(){
       .catch(function(err){message.error('移動失敗: '+(err&&err.message||'error'));setMoving(false);});
   }
 
+  // 欄寬 state（標題欄可拖拉調整）
+  var _cw=useState({title:300,category:120,type:100,status:90,upd:190,gs:100,actions:155});
+  var colWidths=_cw[0];var setColWidths=_cw[1];
+  function setColWidth(key,w){setColWidths(function(prev){var n=Object.assign({},prev);n[key]=w;return n;});}
+
   // 拖曳排序（文件列表，只在非搜尋模式下有效）
   var _dri=useState(null);var dragIdx=_dri[0];var setDragIdx=_dri[1];
   function handleDragStart(index){setDragIdx(index);}
@@ -674,7 +716,7 @@ function ListPage(){
   }
 
   var columns=[
-    {title:'標題',dataIndex:'title',key:'title',sorter:function(a,b){return (a.title||'').localeCompare(b.title||'','zh-TW');},render:function(text,rec){
+    {title:'標題',dataIndex:'title',key:'title',width:colWidths.title,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('title',w);}};},sorter:function(a,b){return (a.title||'').localeCompare(b.title||'','zh-TW');},render:function(text,rec){
       var snippets=rec._snippets||[];
       var keyword=debouncedSearch;
       return h('div',null,
@@ -691,12 +733,12 @@ function ListPage(){
         )
       );
     }},
-    {title:'資料夾',dataIndex:'category',key:'category',width:120,sorter:function(a,b){return ((a.category&&a.category.name)||'').localeCompare((b.category&&b.category.name)||'','zh-TW');},render:function(cat){return cat?h(Tag,{color:'geekblue',style:{fontSize:14}},cat.name||'-'):h('span',{style:{color:'#bbb',fontSize:14}},'（無）');}},
-    {title:'文件類型',dataIndex:'type',key:'type',width:100,sorter:function(a,b){return ((a.type&&a.type.name)||'').localeCompare((b.type&&b.type.name)||'','zh-TW');},render:function(t){return t?h(Tag,{color:'blue',style:{fontSize:14}},t.name||t):'-';}},
-    {title:'狀態',dataIndex:'status',key:'status',width:90,sorter:function(a,b){return (a.status||'').localeCompare(b.status||'');},render:function(s){
+    {title:'資料夾',dataIndex:'category',key:'category',width:colWidths.category,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('category',w);}};},sorter:function(a,b){return ((a.category&&a.category.name)||'').localeCompare((b.category&&b.category.name)||'','zh-TW');},render:function(cat){return cat?h(Tag,{color:'geekblue',style:{fontSize:14}},cat.name||'-'):h('span',{style:{color:'#bbb',fontSize:14}},'（無）');}},
+    {title:'文件類型',dataIndex:'type',key:'type',width:colWidths.type,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('type',w);}};},sorter:function(a,b){return ((a.type&&a.type.name)||'').localeCompare((b.type&&b.type.name)||'','zh-TW');},render:function(t){return t?h(Tag,{color:'blue',style:{fontSize:14}},t.name||t):'-';}},
+    {title:'狀態',dataIndex:'status',key:'status',width:colWidths.status,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('status',w);}};},sorter:function(a,b){return (a.status||'').localeCompare(b.status||'');},render:function(s){
       return h(Tag,{color:s==='published'?'green':'default',style:{fontSize:14}},(s==='published'?'Published':'Draft'));
     }},
-    {title:'最後更新',key:'upd',width:190,defaultSortOrder:'descend',sorter:function(a,b){return new Date(a.updatedAt||0)-new Date(b.updatedAt||0);},render:function(_,rec){
+    {title:'最後更新',key:'upd',width:colWidths.upd,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('upd',w);}};},defaultSortOrder:'descend',sorter:function(a,b){return new Date(a.updatedAt||0)-new Date(b.updatedAt||0);},render:function(_,rec){
       var name=rec.lastEditor?(rec.lastEditor.nickname||rec.lastEditor.username||rec.lastEditor.email):null;
       var date=rec.updatedAt?new Date(rec.updatedAt).toLocaleString('zh-TW',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-';
       return h('div',null,
@@ -704,7 +746,7 @@ function ListPage(){
         name&&h('div',{style:{fontSize:14,color:'#8c99ad',marginTop:2}},h(UserOutlined,{style:{marginRight:3}}),name)
       );
     }},
-    {title:'Git 同步',dataIndex:'gitSyncStatus',key:'gs',width:100,render:function(s,rec){return (rec.githubRepo&&rec.githubFilePath)?syncBadge(s):null;}},
+    {title:'Git 同步',dataIndex:'gitSyncStatus',key:'gs',width:colWidths.gs,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('gs',w);}};},render:function(s,rec){return (rec.githubRepo&&rec.githubFilePath)?syncBadge(s):null;}},
     {title:'操作',key:'actions',width:155,render:function(_,rec){
       function goEdit(e){e.stopPropagation();navigate('/admin/doc-hub/edit/'+rec.id);}
       function goHistory(e){e.stopPropagation();navigate('/admin/doc-hub/versions/'+rec.id);}
@@ -772,6 +814,8 @@ function ListPage(){
       h('div',{style:{flex:1,padding:'0 32px 32px'}},
         h('div',{style:{background:'#fff',borderRadius:8,boxShadow:'0 1px 3px rgba(0,0,0,0.06)',marginTop:0}},
           h(Table,{dataSource:filtered,columns:columns,rowKey:'id',loading:loading,
+            components:{header:{cell:ResizableTitle}},
+            scroll:{x:'max-content'},
             pagination:{pageSize:20,showTotal:function(t){return '共 '+t+' 篇';}},
             size:'middle',
             locale:{emptyText:h(Empty,{description:'沒有文件'})},
