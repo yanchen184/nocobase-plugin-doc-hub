@@ -177,7 +177,7 @@ class PluginDocHubServer extends import_server.Plugin {
     // 覆寫 docDocuments:list — 加權限過濾（owner/viewer/editor/subscriber 都可見）
     this.app.resourceManager.registerActionHandler('docDocuments:list', async (ctx, next) => {
       const currentUser = await getCurrentUser(ctx);
-      if (!currentUser) { ctx.body = { data: [], meta: { count: 0, page: 1, pageSize: 20, totalPage: 0 } }; return; }
+      if (!currentUser) { ctx.body = []; ctx.meta = { count: 0, page: 1, pageSize: 20, totalPage: 0 }; return; }
 
       const params = ctx.action.params;
       const filter = params.filter || {};
@@ -216,10 +216,8 @@ class PluginDocHubServer extends import_server.Plugin {
         where, include, order,
         limit: pageSize, offset: (page - 1) * pageSize,
       });
-      ctx.body = {
-        data: rows.map(r => r.toJSON()),
-        meta: { count, page, pageSize, totalPage: Math.ceil(count / pageSize) },
-      };
+      ctx.body = rows.map(r => r.toJSON());
+      ctx.meta = { count, page, pageSize, totalPage: Math.ceil(count / pageSize) };
     });
 
     // 覆寫 docDocuments:get — 加權限過濾
