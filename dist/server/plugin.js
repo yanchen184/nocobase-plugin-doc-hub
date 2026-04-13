@@ -8,6 +8,18 @@ class PluginDocHubServer extends import_server.Plugin {
   }
 
   async load() {
+    // Helper：取得當前登入用戶（相容 public ACL — 不會自動 inject currentUser）
+    async function getCurrentUser(ctx) {
+      if (ctx.state?.currentUser) return ctx.state.currentUser;
+      if (ctx.auth?.check) {
+        try {
+          const user = await ctx.auth.check();
+          if (user) { ctx.state.currentUser = user; return user; }
+        } catch(e) { /* unauthenticated */ }
+      }
+      return null;
+    }
+
     await this.db.import({ directory: require('path').resolve(__dirname, 'collections') });
 
     // 確保新 collection 的 table 存在（安全的 sync，只新增不刪）
@@ -22,7 +34,7 @@ class PluginDocHubServer extends import_server.Plugin {
 
     // 全文搜尋 action（title + content ILIKE）
     this.app.resourceManager.registerActionHandler('docDocuments:search', async (ctx, next) => {
-      const currentUser = ctx.state?.currentUser;
+      const currentUser = await getCurrentUser(ctx);
       const q = (ctx.action.params.q || '').trim();
       const pageSize = parseInt(ctx.action.params.pageSize) || 20;
       const page = parseInt(ctx.action.params.page) || 1;
@@ -136,7 +148,7 @@ class PluginDocHubServer extends import_server.Plugin {
     // 權限過濾 helper：判斷當前 user 是否為 admin
     function isAdmin(user) {
       if (!user) return false;
-      if (user.id === 1) return true;
+      if (Number(user.id) === 1) return true;
       if (user.roles && user.roles.some(r => r.name === 'root' || r.name === 'admin')) return true;
       return false;
     }
@@ -162,14 +174,10 @@ class PluginDocHubServer extends import_server.Plugin {
       return [...ids];
     }
 
-    // 覆寫 docDocuments:list — 加權限過濾
+    // 覆寫 docDocuments:list — 加權限過濾（owner/viewer/editor/subscriber 都可見）
     this.app.resourceManager.registerActionHandler('docDocuments:list', async (ctx, next) => {
-      const currentUser = ctx.state?.currentUser;
-      if (isAdmin(currentUser)) { await next(); return; }
-      if (!currentUser) { ctx.body = { data: [], meta: { count: 0 } }; return; }
-
-      const visibleIds = await getVisibleDocIds(ctx.db, currentUser.id);
-      if (visibleIds.length === 0) { ctx.body = { data: [], meta: { count: 0, page: 1, pageSize: 20, totalPage: 0 } }; return; }
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.body = { data: [], meta: { count: 0, page: 1, pageSize: 20, totalPage: 0 } }; return; }
 
       const params = ctx.action.params;
       const filter = params.filter || {};
@@ -178,12 +186,26 @@ class PluginDocHubServer extends import_server.Plugin {
       const pageSize = parseInt(params.pageSize) || 20;
       const page = parseInt(params.page) || 1;
       const appends = params.appends || [];
+      const sortParam = params.sort || ['-updatedAt'];
 
-      const where = { id: { [Op.in]: visibleIds } };
+      // 解析 sort 參數 → Sequelize order 格式
+      const order = (Array.isArray(sortParam) ? sortParam : [sortParam]).map(s => {
+        if (s.startsWith('-')) return [s.slice(1), 'DESC'];
+        return [s, 'ASC'];
+      });
+
+      const where = {};
       if (filter.projectId) where.projectId = filter.projectId;
       if (filter.categoryId) where.categoryId = filter.categoryId;
       if (filter.typeId) where.typeId = filter.typeId;
       if (filter.status) where.status = filter.status;
+
+      // 非 admin：只能看自己有權限的文件（owner/viewer/editor/subscriber）
+      if (!isAdmin(currentUser)) {
+        const visibleIds = await getVisibleDocIds(ctx.db, currentUser.id);
+        if (visibleIds.length === 0) { ctx.body = []; ctx.meta = { count: 0, page, pageSize, totalPage: 0 }; return; }
+        where.id = { [Op.in]: visibleIds };
+      }
 
       const include = [];
       if (appends.includes('category')) include.push({ association: 'category', required: false });
@@ -191,17 +213,18 @@ class PluginDocHubServer extends import_server.Plugin {
       if (appends.includes('lastEditor')) include.push({ association: 'lastEditor', required: false });
 
       const { count, rows } = await repo.model.findAndCountAll({
-        where, include,
-        order: [['updatedAt', 'DESC']],
+        where, include, order,
         limit: pageSize, offset: (page - 1) * pageSize,
       });
-      ctx.body = rows.map(r => r.toJSON());
-      ctx.meta = { count, page, pageSize, totalPage: Math.ceil(count / pageSize) };
+      ctx.body = {
+        data: rows.map(r => r.toJSON()),
+        meta: { count, page, pageSize, totalPage: Math.ceil(count / pageSize) },
+      };
     });
 
     // 覆寫 docDocuments:get — 加權限過濾
     this.app.resourceManager.registerActionHandler('docDocuments:get', async (ctx, next) => {
-      const currentUser = ctx.state?.currentUser;
+      const currentUser = await getCurrentUser(ctx);
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('docDocuments');
       const appends = ctx.action.params.appends || [];
@@ -277,14 +300,13 @@ class PluginDocHubServer extends import_server.Plugin {
     // 自訂 update action：處理 m2m 關聯（viewers/editors/subscribers）+ SHA 衝突偵測
     // 文件 create：同資料夾（categoryId）下不允許同名
     this.app.resourceManager.registerActionHandler('docDocuments:create', async (ctx, next) => {
+      await getCurrentUser(ctx); // 確保 ctx.state.currentUser 被設置（public ACL 需要）
       const values = ctx.request.body || {};
       const repo = ctx.db.getRepository('docDocuments');
       const { title, categoryId = null, projectId = null } = values;
       if (title && title.trim()) {
-        const filter = { title: title.trim() };
-        if (categoryId) filter.categoryId = categoryId;
-        else if (projectId) filter.projectId = projectId;
-        filter.categoryId = categoryId || null;
+        const filter = { title: title.trim(), categoryId: categoryId || null };
+        if (projectId) filter.projectId = projectId;
         const dup = await repo.findOne({ filter });
         if (dup) { ctx.throw(400, `文件「${title.trim()}」已存在於此資料夾，請使用不同標題`); return; }
       }
@@ -294,6 +316,7 @@ class PluginDocHubServer extends import_server.Plugin {
     });
 
     this.app.resourceManager.registerActionHandler('docDocuments:update', async (ctx, next) => {
+      await getCurrentUser(ctx); // 確保 ctx.state.currentUser 被設置（public ACL 需要）
       const { filterByTk } = ctx.action.params;
       const values = ctx.action.params.values || ctx.request.body || {};
       const { viewerIds, editorIds, subscriberIds, changeSummary, skipConflictCheck, ...docFields } = values;
@@ -361,18 +384,28 @@ class PluginDocHubServer extends import_server.Plugin {
       if (!doc || !doc.githubRepo || !doc.githubFilePath) {
         ctx.throw(400, '此文件未綁定 GitHub 路徑');
       }
+      const branch = doc.githubBranch || 'master';
+      let ghFile;
       try {
-        const branch = doc.githubBranch || 'master';
-        const ghFile = await githubGetFile(doc.githubRepo, doc.githubFilePath, branch);
-        if (!ghFile || !ghFile.content) ctx.throw(404, ghFile?.message ? `Git 拉取失敗：${ghFile.message}` : '找不到檔案（請確認 repo / 路徑 / 分支）');
+        ghFile = await githubGetFile(doc.githubRepo, doc.githubFilePath, branch);
+      } catch (e) {
+        this.logger.error('[DocHub] pullFromGit fetch error: ' + e.message);
+        ctx.throw(502, 'Git 拉取失敗，請稍後再試');
+        return;
+      }
+      if (!ghFile || !ghFile.content) {
+        ctx.throw(404, ghFile?.message ? `找不到檔案：${ghFile.message}` : '找不到檔案（請確認 repo / 路徑 / 分支）');
+        return;
+      }
+      try {
         const content = Buffer.from(ghFile.content, 'base64').toString('utf8');
         await repo.update({ filterByTk, values: { content, gitSha: ghFile.sha, gitSyncedAt: new Date(), gitSyncStatus: 'synced' } });
         const updated = await repo.findOne({ filterByTk, appends: ['viewers', 'editors', 'subscribers', 'type', 'lastEditor'] });
         ctx.body = updated;
         this.logger.info(`[DocHub] pullFromGit: doc ${filterByTk} pulled sha=${ghFile.sha}`);
       } catch (e) {
-        this.logger.error('[DocHub] pullFromGit error: ' + e.message);
-        ctx.throw(500, 'GitHub 拉取失敗：' + e.message);
+        this.logger.error('[DocHub] pullFromGit update error: ' + e.message);
+        ctx.throw(500, 'Git 拉取成功但更新失敗，請稍後再試');
       }
       await next();
     });
@@ -486,59 +519,10 @@ class PluginDocHubServer extends import_server.Plugin {
       await next();
     });
 
-    // 自訂 list action：依 viewers 過濾（非 admin 只能看自己是 viewer 或 author 的文件）
-    this.app.resourceManager.registerActionHandler('docDocuments:list', async (ctx, next) => {
-      const currentUser = ctx.state?.currentUser;
-      const params = ctx.action.params;
-      const pageSize = parseInt(params.pageSize) || 20;
-      const page = parseInt(params.page) || 1;
-      const sort = params.sort || ['-updatedAt'];
-      const appends = params.appends || [];
-      const filter = params.filter || {};
-      const { Op } = require('sequelize');
-      const repo = ctx.db.getRepository('docDocuments');
-
-      // admin（role: root 或 admin）可以看全部
-      const isAdmin = currentUser?.roles?.some(r => r.name === 'root' || r.name === 'admin')
-        || currentUser?.id === 1; // fallback: id=1 是 super admin
-
-      const whereExtra = {};
-      if (!isAdmin && currentUser) {
-        // 只看 authorId = 自己，或在 viewers 清單裡
-        whereExtra[Op.or] = [
-          { authorId: currentUser.id },
-          { '$viewers.id$': currentUser.id },
-        ];
-      }
-
-      const { count, rows } = await repo.model.findAndCountAll({
-        where: { ...filter, ...whereExtra },
-        include: [
-          { association: 'category', required: false },
-          { association: 'type', required: false },
-          { association: 'lastEditor', required: false },
-          // 加入 viewers join 供 whereExtra 用
-          ...(!isAdmin && currentUser ? [{ association: 'viewers', required: false }] : []),
-        ],
-        order: [['updatedAt', 'DESC']],
-        limit: pageSize,
-        offset: (page - 1) * pageSize,
-        distinct: true,
-      });
-
-      ctx.body = rows.map(r => {
-        const doc = r.toJSON();
-        delete doc.viewers; // 不要把完整 viewers list 傳給列表
-        return doc;
-      });
-      ctx.meta = { count, page, pageSize, totalPage: Math.ceil(count / pageSize) };
-      await next();
-    });
-
     // 群組 CRUD（list/get 所有人，create/update/destroy 限 admin）
     this.app.resourceManager.registerActionHandler('docGroups:create', async (ctx, next) => {
-      const currentUser = ctx.state?.currentUser;
-      const isAdmin = currentUser?.id === 1
+      const currentUser = await getCurrentUser(ctx);
+      const isAdmin = Number(currentUser?.id) === 1
         || currentUser?.roles?.some(r => r.name === 'root' || r.name === 'admin');
       if (!isAdmin) { ctx.throw(403, '只有管理員可以建立群組'); return; }
       const values = ctx.request.body || {};
@@ -549,8 +533,8 @@ class PluginDocHubServer extends import_server.Plugin {
     });
 
     this.app.resourceManager.registerActionHandler('docGroups:update', async (ctx, next) => {
-      const currentUser = ctx.state?.currentUser;
-      const isAdmin = currentUser?.id === 1
+      const currentUser = await getCurrentUser(ctx);
+      const isAdmin = Number(currentUser?.id) === 1
         || currentUser?.roles?.some(r => r.name === 'root' || r.name === 'admin');
       if (!isAdmin) { ctx.throw(403, '只有管理員可以修改群組'); return; }
       const { filterByTk } = ctx.action.params;
@@ -563,8 +547,8 @@ class PluginDocHubServer extends import_server.Plugin {
     });
 
     this.app.resourceManager.registerActionHandler('docGroups:destroy', async (ctx, next) => {
-      const currentUser = ctx.state?.currentUser;
-      const isAdmin = currentUser?.id === 1
+      const currentUser = await getCurrentUser(ctx);
+      const isAdmin = Number(currentUser?.id) === 1
         || currentUser?.roles?.some(r => r.name === 'root' || r.name === 'admin');
       if (!isAdmin) { ctx.throw(403, '只有管理員可以刪除群組'); return; }
       const { filterByTk } = ctx.action.params;
@@ -576,8 +560,8 @@ class PluginDocHubServer extends import_server.Plugin {
 
     // 專案 create/update/destroy 限 admin
     this.app.resourceManager.registerActionHandler('docProjects:create', async (ctx, next) => {
-      const currentUser = ctx.state?.currentUser;
-      const isAdmin = currentUser?.id === 1
+      const currentUser = await getCurrentUser(ctx);
+      const isAdmin = Number(currentUser?.id) === 1
         || currentUser?.roles?.some(r => r.name === 'root' || r.name === 'admin');
       if (!isAdmin) { ctx.throw(403, '只有管理員可以建立專案'); return; }
       const values = ctx.request.body || {};
@@ -588,8 +572,8 @@ class PluginDocHubServer extends import_server.Plugin {
     });
 
     this.app.resourceManager.registerActionHandler('docProjects:destroy', async (ctx, next) => {
-      const currentUser = ctx.state?.currentUser;
-      const isAdmin = currentUser?.id === 1
+      const currentUser = await getCurrentUser(ctx);
+      const isAdmin = Number(currentUser?.id) === 1
         || currentUser?.roles?.some(r => r.name === 'root' || r.name === 'admin');
       if (!isAdmin) { ctx.throw(403, '只有管理員可以刪除專案'); return; }
       const { filterByTk } = ctx.action.params;
@@ -659,11 +643,14 @@ class PluginDocHubServer extends import_server.Plugin {
       name: 'pm.' + this.name,
       actions: ['docGroups:*', 'docProjects:*', 'docDocuments:*', 'docCategories:*', 'docVersions:*', 'docTypes:*'],
     });
-    this.app.acl.allow('docDocuments', ['syncToGit', 'search', 'list', 'update', 'get', 'create', 'pullFromGit', 'fetchFromGit', 'destroy', 'reorder'], 'loggedIn');
-    this.app.acl.allow('docDocuments', ['webhookReceive'], 'public'); // webhook 不需要登入
-    this.app.acl.allow('docProjects', ['list', 'get', 'create', 'update', 'destroy', 'syncToGit'], 'loggedIn');
-    this.app.acl.allow('docGroups', ['list', 'get', 'create', 'update', 'destroy'], 'loggedIn');
-    this.app.acl.allow('docCategories', ['list', 'get', 'create', 'update', 'destroy', 'reorder'], 'loggedIn');
+    // 用 public 讓 NocoBase member 角色也能進入，DocHub 自己的 handler 負責權限控制
+    // 注意：public ACL 不會 inject currentUser，handler 需要自行從 ctx.auth.user 或 token 取得
+    // 用 public 讓所有角色（包含 member）都能通過 ACL，handler 自己負責權限過濾
+    // public ACL 不會 inject currentUser，由 getCurrentUser() helper 手動從 auth 取得
+    this.app.acl.allow('docDocuments', ['syncToGit', 'search', 'list', 'update', 'get', 'create', 'pullFromGit', 'fetchFromGit', 'destroy', 'reorder', 'webhookReceive'], 'public');
+    this.app.acl.allow('docProjects', ['list', 'get', 'create', 'update', 'destroy', 'syncToGit'], 'public');
+    this.app.acl.allow('docGroups', ['list', 'get', 'create', 'update', 'destroy'], 'public');
+    this.app.acl.allow('docCategories', ['list', 'get', 'create', 'update', 'destroy', 'reorder'], 'public');
 
     // 自動版本記錄 + 訂閱者通知
     this.db.on('docDocuments.afterCreate', async (model, options) => {

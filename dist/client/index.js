@@ -339,7 +339,7 @@ function DocSidebar(props){
         h('div',{
           style:{padding:'6px 16px 6px '+indent+'px',display:'flex',alignItems:'center',justifyContent:'space-between',
             cursor:isRenaming?'text':'grab',
-            color:isActive?'#fff':'#a6b2c2',fontSize:12,
+            color:isActive?'#fff':'#a6b2c2',fontSize:14,
             background:dragCatId===cat.id?'rgba(22,136,255,0.08)':(isActive?'rgba(22,136,255,0.15)':'transparent'),
             borderLeft:isActive?'3px solid #1688ff':'3px solid transparent'},
           onClick:function(){if(isRenaming)return;onSelectProject(projId);onSelectCat(isActive?null:cat.id);}},
@@ -360,7 +360,7 @@ function DocSidebar(props){
                   },
                   onClick:function(e){e.stopPropagation();},
                   style:{background:'transparent',border:'none',borderBottom:'1px solid #1688ff',color:'#fff',
-                    fontSize:12,outline:'none',width:'100%',padding:'0 2px'}
+                    fontSize:14,outline:'none',width:'100%',padding:'0 2px'}
                 })
               :h('span',{
                   style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'},
@@ -368,7 +368,7 @@ function DocSidebar(props){
                 },cat.name)
           ),
           h('span',{style:{display:'flex',alignItems:'center',gap:2,flexShrink:0}},
-            h('span',{title:'新增子資料夾',onClick:function(e){e.stopPropagation();setCreateCatProjId(projId);setCreateCatParentId(cat.id);setNewCatName('');},style:{color:'#6b8299',fontSize:12,cursor:'pointer',padding:'0 2px',lineHeight:1}},'+'),
+            h('span',{title:'新增子資料夾',onClick:function(e){e.stopPropagation();setCreateCatProjId(projId);setCreateCatParentId(cat.id);setNewCatName('');},style:{color:'#6b8299',fontSize:14,cursor:'pointer',padding:'0 2px',lineHeight:1}},'+'),
             isAdmin&&h('span',{title:'刪除資料夾',onClick:function(e){e.stopPropagation();setDeleteCat(cat);},style:{color:'#8c4444',fontSize:11,cursor:'pointer',padding:'0 2px',lineHeight:1,opacity:0.6}},'×')
           )
         ),
@@ -382,14 +382,14 @@ function DocSidebar(props){
     return h('div',{key:proj.id},
       h('div',{
         style:{padding:'8px 16px 8px 28px',display:'flex',alignItems:'center',justifyContent:'space-between',cursor:'pointer',
-          color:isProjActive?'#fff':'#d9e0eb',fontSize:13,fontWeight:600,
+          color:isProjActive?'#fff':'#d9e0eb',fontSize:15,fontWeight:600,
           background:isProjActive?'rgba(22,136,255,0.2)':'transparent',
           borderLeft:isProjActive?'3px solid #1688ff':'3px solid transparent',
           transition:'background 0.15s'},
         onClick:function(){onSelectProject(isProjActive?null:proj.id);onSelectCat(null);}},
         h('span',{style:{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},'📁 ',proj.name),
         h('div',{style:{display:'flex',alignItems:'center',gap:4,flexShrink:0}},
-          h('span',{style:{background:isProjActive?'#1688ff':'#2a4060',borderRadius:9,padding:'1px 7px',fontSize:11,color:'#fff',fontWeight:600}},
+          h('span',{style:{background:isProjActive?'#1688ff':'#2a4060',borderRadius:9,padding:'1px 7px',fontSize:12,color:'#fff',fontWeight:600}},
             docCount[proj.id]!=null?docCount[proj.id]:'…'),
           h('span',{
             title:'新增根資料夾',
@@ -416,7 +416,7 @@ function DocSidebar(props){
       h('div',{style:{background:'#26384d',borderRadius:6,padding:'8px 12px',display:'flex',alignItems:'center',gap:6}},
         h(SearchOutlined,{style:{color:'#99a6b2',fontSize:13}}),
         h('input',{value:search,onChange:function(e){onSearch(e.target.value);},placeholder:'全文搜尋文件...',
-          style:{background:'transparent',border:'none',outline:'none',color:'#e0e8f0',fontSize:12,flex:1,width:'100%'}})
+          style:{background:'transparent',border:'none',outline:'none',color:'#e0e8f0',fontSize:14,flex:1,width:'100%'}})
       )
     ),
     // Groups + Projects + Categories
@@ -424,7 +424,7 @@ function DocSidebar(props){
       // 全部文件（清除篩選）
       h('div',{
         style:{padding:'8px 16px',display:'flex',alignItems:'center',gap:8,cursor:'pointer',
-          color:(!activeProjectId&&!activeCatId)?'#fff':'#a6b2c2',fontSize:13,fontWeight:600,
+          color:(!activeProjectId&&!activeCatId)?'#fff':'#a6b2c2',fontSize:15,fontWeight:600,
           background:(!activeProjectId&&!activeCatId)?'rgba(22,136,255,0.15)':'transparent',
           borderLeft:(!activeProjectId&&!activeCatId)?'3px solid #1688ff':'3px solid transparent',
           marginBottom:4},
@@ -433,7 +433,7 @@ function DocSidebar(props){
       ),
       // 群組標題 + 新增群組按鈕（admin only）
       h('div',{style:{padding:'0 16px 6px',display:'flex',alignItems:'center',justifyContent:'space-between'}},
-        h('span',{style:{fontSize:11,fontWeight:700,color:'#8c99ad',letterSpacing:'0.5px'}},'群組'),
+        h('span',{style:{fontSize:13,fontWeight:700,color:'#8c99ad',letterSpacing:'0.5px'}},'群組'),
         isAdmin&&h('span',{
           title:'新增群組',
           onClick:function(){setShowCreateGroup(true);setNewGroupName('');},
@@ -462,7 +462,7 @@ function DocSidebar(props){
       // 無群組的專案（ungrouped）
       ungroupedProjects.length>0&&h('div',null,
         h('div',{style:{padding:'8px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}},
-          h('span',{style:{fontSize:11,fontWeight:700,color:'#8c99ad',letterSpacing:'0.5px'}},'未分組專案'),
+          h('span',{style:{fontSize:13,fontWeight:700,color:'#8c99ad',letterSpacing:'0.5px'}},'未分組專案'),
           isAdmin&&h('span',{
             title:'新增專案（無群組）',
             onClick:function(){setCreateProjGroupId(-1);setNewProjName('');}, // -1 = no group
@@ -476,7 +476,7 @@ function DocSidebar(props){
       )
     ),
     // Bottom: Admin
-    h('div',{style:{borderTop:'1px solid #33475c',padding:'12px 16px',color:'#8c99ad',fontSize:13,cursor:'pointer'}},'⚙ Admin 設定'),
+    h('div',{style:{borderTop:'1px solid #33475c',padding:'12px 16px',color:'#8c99ad',fontSize:14,cursor:'pointer'}},'⚙ Admin 設定'),
 
     // ── Modals ──
     // 新增群組
@@ -674,7 +674,7 @@ function ListPage(){
   }
 
   var columns=[
-    {title:'標題',dataIndex:'title',key:'title',render:function(text,rec){
+    {title:'標題',dataIndex:'title',key:'title',sorter:function(a,b){return (a.title||'').localeCompare(b.title||'','zh-TW');},render:function(text,rec){
       var snippets=rec._snippets||[];
       var keyword=debouncedSearch;
       return h('div',null,
@@ -684,24 +684,24 @@ function ListPage(){
         ),
         snippets.length>0&&h('div',{style:{marginTop:4}},
           snippets.map(function(s,i){
-            return h('div',{key:i,style:{fontSize:12,color:'#73808c',lineHeight:1.6,padding:'2px 0',borderLeft:'2px solid #ffe58f',paddingLeft:8,marginTop:i>0?4:0}},
+            return h('div',{key:i,style:{fontSize:14,color:'#73808c',lineHeight:1.6,padding:'2px 0',borderLeft:'2px solid #ffe58f',paddingLeft:8,marginTop:i>0?4:0}},
               highlightText(s.text,keyword)
             );
           })
         )
       );
     }},
-    {title:'資料夾',dataIndex:'category',key:'category',width:120,render:function(cat){return cat?h(Tag,{color:'geekblue',style:{fontSize:11}},cat.name||'-'):h('span',{style:{color:'#bbb',fontSize:11}},'（無）');}},
-    {title:'文件類型',dataIndex:'type',key:'type',width:100,render:function(t){return t?h(Tag,{color:'blue',style:{fontSize:11}},t.name||t):'-';}},
-    {title:'狀態',dataIndex:'status',key:'status',width:90,render:function(s){
-      return h(Tag,{color:s==='published'?'green':'default',style:{fontSize:11}},(s==='published'?'Published':'Draft'));
+    {title:'資料夾',dataIndex:'category',key:'category',width:120,sorter:function(a,b){return ((a.category&&a.category.name)||'').localeCompare((b.category&&b.category.name)||'','zh-TW');},render:function(cat){return cat?h(Tag,{color:'geekblue',style:{fontSize:14}},cat.name||'-'):h('span',{style:{color:'#bbb',fontSize:14}},'（無）');}},
+    {title:'文件類型',dataIndex:'type',key:'type',width:100,sorter:function(a,b){return ((a.type&&a.type.name)||'').localeCompare((b.type&&b.type.name)||'','zh-TW');},render:function(t){return t?h(Tag,{color:'blue',style:{fontSize:14}},t.name||t):'-';}},
+    {title:'狀態',dataIndex:'status',key:'status',width:90,sorter:function(a,b){return (a.status||'').localeCompare(b.status||'');},render:function(s){
+      return h(Tag,{color:s==='published'?'green':'default',style:{fontSize:14}},(s==='published'?'Published':'Draft'));
     }},
-    {title:'最後更新',key:'upd',width:190,render:function(_,rec){
+    {title:'最後更新',key:'upd',width:190,defaultSortOrder:'descend',sorter:function(a,b){return new Date(a.updatedAt||0)-new Date(b.updatedAt||0);},render:function(_,rec){
       var name=rec.lastEditor?(rec.lastEditor.nickname||rec.lastEditor.username||rec.lastEditor.email):null;
       var date=rec.updatedAt?new Date(rec.updatedAt).toLocaleString('zh-TW',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-';
       return h('div',null,
-        h('div',{style:{fontSize:12,color:'#1a1f26'}},date),
-        name&&h('div',{style:{fontSize:11,color:'#8c99ad',marginTop:2}},h(UserOutlined,{style:{marginRight:3}}),name)
+        h('div',{style:{fontSize:15,color:'#1a1f26'}},date),
+        name&&h('div',{style:{fontSize:14,color:'#8c99ad',marginTop:2}},h(UserOutlined,{style:{marginRight:3}}),name)
       );
     }},
     {title:'Git 同步',dataIndex:'gitSyncStatus',key:'gs',width:100,render:function(s,rec){return (rec.githubRepo&&rec.githubFilePath)?syncBadge(s):null;}},
@@ -775,7 +775,12 @@ function ListPage(){
             pagination:{pageSize:20,showTotal:function(t){return '共 '+t+' 篇';}},
             size:'middle',
             locale:{emptyText:h(Empty,{description:'沒有文件'})},
-            onRow:debouncedSearch?undefined:function(rec,index){
+            onChange:function(_p,_f,sorter){
+              // 有排序時停用拖曳（避免衝突）
+              var sorted=sorter&&sorter.order;
+              setDragIdx(sorted?-1:null);
+            },
+            onRow:(debouncedSearch||dragIdx===-1)?undefined:function(rec,index){
               return {
                 draggable:true,
                 style:{cursor:'grab'},
