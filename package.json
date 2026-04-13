@@ -1,0 +1,13 @@
+{
+  "name": "@nocobase/plugin-doc-hub",
+  "version": "2.0.32",
+  "main": "dist/server/index.js",
+  "displayName": "DocHub - Document Management",
+  "displayName.zh-CN": "DocHub - 文件庫管理",
+  "description": "Document management system with Git sync, version history, and project-based access control.",
+  "description.zh-CN": "文件庫管理系統，支援 Git 同步、版本歷史、專案分類與權限隔離。",
+  "license": "MIT",
+  "nocobase": { "supportedVersions": ["1.x"], "editionLevel": 0 },
+  "peerDependencies": { "@nocobase/client": "2.x", "@nocobase/server": "2.x", "@nocobase/database": "2.x" },
+  "keywords": ["Documents", "Git", "Webhook"]
+}
