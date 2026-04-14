@@ -254,6 +254,15 @@ class PluginDocHubServer extends import_server.Plugin {
       return repo.startsWith(GITLAB_HOST) || repo.startsWith('https://' + GITLAB_HOST);
     }
 
+    // 檢查 Git token 是否已設定
+    function checkGitToken(repo) {
+      if (isGitLab(repo)) {
+        if (!GITLAB_TOKEN) throw Object.assign(new Error('GitLab Token 未設定，請在 .env 中設定 DOCHUB_GITLAB_TOKEN'), { status: 503 });
+      } else {
+        if (!GITHUB_TOKEN) throw Object.assign(new Error('GitHub Token 未設定，請在 .env 中設定 DOCHUB_GITHUB_TOKEN'), { status: 503 });
+      }
+    }
+
     // 統一拉取介面：回傳 { content(base64), sha, name }
     async function githubGetFile(repo, filePath, branch = 'main') {
       const https = require('https');
@@ -402,6 +411,7 @@ class PluginDocHubServer extends import_server.Plugin {
       if (!filePath) {
         ctx.throw(400, '此文件未綁定 GitHub 路徑');
       }
+      try { checkGitToken(doc.githubRepo); } catch(e) { ctx.throw(503, e.message); return; }
       let ghFile;
       try {
         ghFile = await githubGetFile(doc.githubRepo, filePath, branch);
@@ -439,6 +449,7 @@ class PluginDocHubServer extends import_server.Plugin {
       this.logger.info(`[DocHub] fetchFromGit: repo=${githubRepo} path=${githubFilePath} branch=${branch} rawBody=${JSON.stringify(rawBody)}`);
       const resolvedFilePath = githubFilePath || 'README.md';
       if (!githubRepo) ctx.throw(400, '請提供 repo');
+      try { checkGitToken(githubRepo); } catch(e) { ctx.throw(503, e.message); return; }
       try {
         const ghFile = await githubGetFile(githubRepo, resolvedFilePath, branch);
         this.logger.info(`[DocHub] fetchFromGit result: ${JSON.stringify({sha: ghFile?.sha, hasContent: !!ghFile?.content, message: ghFile?.message})}`);
@@ -734,7 +745,15 @@ class PluginDocHubServer extends import_server.Plugin {
       const changed = model.changed();
       if (!changed || !changed.includes('content')) return;
 
-      const currentUser = options?.context?.state?.currentUser;
+      // public ACL 下 ctx.state.currentUser 可能為 null，需從 auth 取
+      let currentUser = options?.context?.state?.currentUser;
+      if (!currentUser && options?.context?.auth?.check) {
+        try {
+          const u = await options.context.auth.check();
+          if (u) { currentUser = u; if (options.context.state) options.context.state.currentUser = u; }
+        } catch(e) { /* unauthenticated */ }
+      }
+
       const userSummary = options?.context?.action?.params?.values?.changeSummary
         || options?.context?.body?.changeSummary;
 
@@ -750,8 +769,9 @@ class PluginDocHubServer extends import_server.Plugin {
       // 訂閱者站內信通知
       try {
         const docRepo = this.db.getRepository('docDocuments');
-        const doc = await docRepo.findOne({ filter: { id: model.id }, appends: ['subscribers', 'category'] });
+        const doc = await docRepo.findOne({ filterByTk: model.id, appends: ['subscribers', 'category'] });
         const subscribers = doc?.subscribers || [];
+        this.logger.info(`[DocHub notify] docId=${model.id} subscribers=${subscribers.length} currentUserId=${currentUser?.id}`);
         if (subscribers.length === 0) return;
 
         // currentUser 在 hook context 可能只有 id，需從 DB 取完整資料

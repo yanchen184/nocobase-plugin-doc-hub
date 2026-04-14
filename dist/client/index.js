@@ -1067,8 +1067,10 @@ function EditPage(){
         })
         .catch(function(err){
           setPulling(false);
+          var status=err&&err.response&&err.response.status;
           var svrMsg=err&&err.response&&err.response.data&&err.response.data.errors&&err.response.data.errors[0]&&err.response.data.errors[0].message;
-          message.error('拉取失敗: '+(svrMsg||err&&err.message||'error'));
+          var msg=status===503?'Git Token 未設定：'+(svrMsg||'請聯繫管理員設定環境變數'):'拉取失敗: '+(svrMsg||err&&err.message||'error');
+          message.error(msg,status===503?8:4);
         });
     } else {
       client.request({url:'docDocuments:pullFromGit',method:'post',params:{filterByTk:docId}})
@@ -1083,8 +1085,10 @@ function EditPage(){
         })
         .catch(function(err){
           setPulling(false);
+          var status=err&&err.response&&err.response.status;
           var svrMsg=err&&err.response&&err.response.data&&err.response.data.errors&&err.response.data.errors[0]&&err.response.data.errors[0].message;
-          message.error('拉取失敗: '+(svrMsg||err&&err.message||'error'));
+          var msg=status===503?'Git Token 未設定：'+(svrMsg||'請聯繫管理員設定環境變數'):'拉取失敗: '+(svrMsg||err&&err.message||'error');
+          message.error(msg,status===503?8:4);
         });
     }
   }
