@@ -144,10 +144,14 @@ function useDoc(id){
   return {doc:doc,loading:loading};
 }
 
-function syncBadge(s){
-  if(s==='synced')return h(Badge,{status:'success',text:'Synced'});
-  if(s==='failed')return h(Badge,{status:'error',text:'Failed'});
-  return h(Badge,{status:'default',text:'Pending'});
+function syncBadge(s,rec){
+  var statusNode=s==='synced'?h(Badge,{status:'success',text:'Synced'}):s==='failed'?h(Badge,{status:'error',text:'Failed'}):h(Badge,{status:'default',text:'Pending'});
+  if(s==='synced'&&rec&&rec.gitLastSyncedByName){
+    var syncedAt=rec.gitSyncedAt?new Date(rec.gitSyncedAt).toLocaleString('zh-TW',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-';
+    var tipContent=h('div',null,h('div',null,'同步者：'+rec.gitLastSyncedByName),h('div',null,'時間：'+syncedAt));
+    return h(Tooltip,{title:tipContent},statusNode);
+  }
+  return statusNode;
 }
 
 function GitSyncModal(props){
@@ -773,7 +777,7 @@ function ListPage(){
         name&&h('div',{style:{fontSize:14,color:'#8c99ad',marginTop:2}},h(UserOutlined,{style:{marginRight:3}}),name)
       );
     }},
-    {title:'Git 同步',dataIndex:'gitSyncStatus',key:'gs',width:colWidths.gs,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('gs',w);}};},render:function(s,rec){return rec.githubRepo?syncBadge(s):null;}},
+    {title:'Git 同步',dataIndex:'gitSyncStatus',key:'gs',width:colWidths.gs,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('gs',w);}};},render:function(s,rec){return rec.githubRepo?syncBadge(s,rec):null;}},
     {title:'操作',key:'actions',width:155,render:function(_,rec){
       function goEdit(e){e.stopPropagation();navigate('/admin/doc-hub/edit/'+rec.id);}
       function goHistory(e){e.stopPropagation();navigate('/admin/doc-hub/versions/'+rec.id);}
@@ -964,6 +968,7 @@ function EditPage(){
   var _sm=useState(false);var showSync=_sm[0];var setShowSync=_sm[1];
   var _sc=useState(false);var showSaveModal=_sc[0];var setShowSaveModal=_sc[1];
   var _cs=useState('');var changeSummary=_cs[0];var setChangeSummary=_cs[1];
+  var _br=useState(false);var btnReady=_br[0];var setBtnReady=_br[1];
   var _mr=useState(!!window.marked);var markedReady=_mr[0];var setMarkedReady=_mr[1];
   // Git 衝突 Modal
   var _gc=useState(false);var showConflict=_gc[0];var setShowConflict=_gc[1];
@@ -1019,6 +1024,9 @@ function EditPage(){
     setEditors(docData.editors||[]);
     setSubscribers(docData.subscribers||[]);
   },[docData]);
+  useEffect(function(){
+    if(showSaveModal){setBtnReady(false);var t=setTimeout(function(){setBtnReady(true);},800);return function(){clearTimeout(t);};}
+  },[showSaveModal]);
 
   function setField(k,v){setForm(function(f){var nf={};for(var key in f)nf[key]=f[key];nf[k]=v;return nf;});}
 
@@ -1283,17 +1291,18 @@ function EditPage(){
       width:440,
       footer:h(Space,null,
         h(Button,{onClick:function(){setShowSaveModal(false);setSaving(false);}},'取消'),
-        h(Button,{type:'primary',loading:saving,onClick:function(){doSave(changeSummary,showSaveModal==='published'?'published':undefined);}},
+        h(Button,{type:'primary',loading:saving,disabled:!btnReady,onClick:function(){doSave(changeSummary,showSaveModal==='published'?'published':undefined);}},
           showSaveModal==='published'?'發布':'儲存')
       )},
       h('div',{style:{marginBottom:8,color:'#73808c',fontSize:13}},'選填：這次修改了什麼？（留空則顯示版本號）'),
-      h(Input,{
+      h(Input.TextArea,{
         value:changeSummary,
         onChange:function(e){setChangeSummary(e.target.value);},
         placeholder:'例：修正錯字、新增 API 範例...',
-        maxLength:100,
+        maxLength:300,
         autoFocus:true,
-        onPressEnter:function(){doSave(changeSummary,showSaveModal==='published'?'published':undefined);}
+        rows:4,
+        autoSize:{minRows:3,maxRows:8}
       })
     ),
 
@@ -1421,7 +1430,8 @@ function VersionPage(){
                 ),
                 h('div',{style:{fontSize:12,color:'#73808c',marginTop:2}},
                   h(UserOutlined,{style:{marginRight:4,fontSize:11}}),editorName
-                )
+                ),
+                ver.changeSummary&&h('div',{style:{fontSize:11,color:'#a0aab5',marginTop:3,whiteSpace:'pre-wrap',wordBreak:'break-word'}},ver.changeSummary)
               );
             })
       ),

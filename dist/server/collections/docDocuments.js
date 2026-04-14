@@ -13,6 +13,7 @@ module.exports = (0, import_database.defineCollection)({
     { type: 'string', name: 'gitSha' },
     { type: 'date', name: 'gitSyncedAt' },
     { type: 'string', name: 'gitSyncStatus', defaultValue: 'pending' },
+    { type: 'string', name: 'gitLastSyncedByName' },
     { type: 'string', name: 'githubRepo' },
     { type: 'string', name: 'githubFilePath' },
     { type: 'string', name: 'githubBranch', defaultValue: 'master' },

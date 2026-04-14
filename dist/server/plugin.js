@@ -104,6 +104,7 @@ class PluginDocHubServer extends import_server.Plugin {
         `SELECT "docDocuments".id, "docDocuments".title, "docDocuments".status,
                 "docDocuments"."typeId", "docDocuments"."categoryId", "docDocuments"."projectId",
                 "docDocuments"."githubRepo", "docDocuments"."githubFilePath", "docDocuments"."gitSyncStatus",
+                "docDocuments"."gitSyncedAt", "docDocuments"."gitLastSyncedByName",
                 "docDocuments"."updatedAt", "docDocuments"."createdAt",
                 "docDocuments"."lastEditorId", "docDocuments"."authorId"
                 ${headlineSQL}
@@ -205,6 +206,14 @@ class PluginDocHubServer extends import_server.Plugin {
         const visibleIds = await getVisibleDocIds(ctx.db, currentUser.id);
         if (visibleIds.length === 0) { ctx.body = []; ctx.meta = { count: 0, page, pageSize, totalPage: 0 }; return; }
         where.id = { [Op.in]: visibleIds };
+        // 草稿只有創建者才能看到
+        where[Op.and] = where[Op.and] || [];
+        where[Op.and].push({
+          [Op.or]: [
+            { status: 'published' },
+            { [Op.and]: [{ status: 'draft' }, { createdById: currentUser.id }] },
+          ],
+        });
       }
 
       const include = [];
@@ -240,6 +249,22 @@ class PluginDocHubServer extends import_server.Plugin {
         }
       }
       ctx.body = doc;
+    });
+
+    // 覆寫 docDocuments:destroy — 只有文件創建者或 admin 可刪除
+    this.app.resourceManager.registerActionHandler('docDocuments:destroy', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      const { filterByTk } = ctx.action.params;
+      const repo = ctx.db.getRepository('docDocuments');
+      const doc = await repo.findOne({ filterByTk });
+      if (!doc) { ctx.throw(404, '文件不存在'); return; }
+      if (!isAdmin(currentUser) && doc.createdById !== currentUser.id) {
+        ctx.throw(403, '只有文件創建者或管理員可以刪除文件'); return;
+      }
+      await repo.destroy({ filterByTk });
+      ctx.body = { ok: true };
+      await next();
     });
 
     // Git API helper（支援 GitHub 和 GitLab）

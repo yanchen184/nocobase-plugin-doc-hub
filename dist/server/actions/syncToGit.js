@@ -147,7 +147,7 @@ exports.syncToGit = async function syncToGit(ctx, next) {
   }
 
   // 更新文件的 Git 狀態
-  await docRepo.update({ filterByTk, values: { gitSha: newSha, gitSyncedAt: new Date(), gitSyncStatus: 'synced' } });
+  await docRepo.update({ filterByTk, values: { gitSha: newSha, gitSyncedAt: new Date(), gitSyncStatus: 'synced', gitLastSyncedByName: editorName } });
 
   ctx.body = { success: true, gitSha: newSha, filePath };
   await next();
