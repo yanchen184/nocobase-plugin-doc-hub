@@ -1224,7 +1224,7 @@ function EditPage(){
       ),
       h('div',{style:{display:'flex',alignItems:'center',gap:8}},
         h('span',{style:{fontSize:12,fontWeight:600,color:'#667380'}},'文件類型'),
-        h(Select,{value:form.typeId,onChange:function(v){setField('typeId',v);},placeholder:'選擇類型（必填）',style:{width:140,border:!form.typeId?'1px solid #ff7875':'',borderRadius:6},size:'small',allowClear:true,
+        h(Select,{value:form.typeId,onChange:function(v){setField('typeId',v);},placeholder:'選擇類型（必填）',style:{width:170,border:!form.typeId?'1px solid #ff7875':'',borderRadius:6},size:'small',allowClear:true,
           options:docTypes.map(function(t){return{label:t.name,value:t.id};})})
       ),
       h('div',{style:{display:'flex',alignItems:'center',gap:8}},
