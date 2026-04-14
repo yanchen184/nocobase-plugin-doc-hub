@@ -43,7 +43,7 @@ var useParams=_rr.useParams;
 var useNavigate=_rr.useNavigate;
 var useLocation=_rr.useLocation||function(){return {search:window.location.search};};
 
-var Table=_antd.Table,Button=_antd.Button,Input=_antd.Input,Select=_antd.Select,Modal=_antd.Modal,Tag=_antd.Tag,Space=_antd.Space,Spin=_antd.Spin,message=_antd.message,Typography=_antd.Typography,Tooltip=_antd.Tooltip,Badge=_antd.Badge,Row=_antd.Row,Col=_antd.Col,Alert=_antd.Alert,Empty=_antd.Empty,Divider=_antd.Divider,Avatar=_antd.Avatar,Popover=_antd.Popover;
+var Table=_antd.Table,Button=_antd.Button,Input=_antd.Input,Select=_antd.Select,Modal=_antd.Modal,Tag=_antd.Tag,Space=_antd.Space,Spin=_antd.Spin,message=_antd.message,Typography=_antd.Typography,Tooltip=_antd.Tooltip,Badge=_antd.Badge,Row=_antd.Row,Col=_antd.Col,Alert=_antd.Alert,Empty=_antd.Empty,Divider=_antd.Divider,Avatar=_antd.Avatar,Popover=_antd.Popover,Dropdown=_antd.Dropdown,Menu=_antd.Menu;
 var PlusOutlined=_icons.PlusOutlined,SearchOutlined=_icons.SearchOutlined,HistoryOutlined=_icons.HistoryOutlined,EditOutlined=_icons.EditOutlined,SyncOutlined=_icons.SyncOutlined,ExclamationCircleOutlined=_icons.ExclamationCircleOutlined,FolderOutlined=_icons.FolderOutlined,FileTextOutlined=_icons.FileTextOutlined,ArrowLeftOutlined=_icons.ArrowLeftOutlined,UserOutlined=_icons.UserOutlined,BoldOutlined=_icons.BoldOutlined,ItalicOutlined=_icons.ItalicOutlined,UnderlineOutlined=_icons.UnderlineOutlined,LinkOutlined=_icons.LinkOutlined,CodeOutlined=_icons.CodeOutlined,OrderedListOutlined=_icons.OrderedListOutlined,UnorderedListOutlined=_icons.UnorderedListOutlined,DeleteOutlined=_icons.DeleteOutlined,SwapOutlined=_icons.SwapOutlined,InfoCircleOutlined=_icons.InfoCircleOutlined;
 
 // 動態載入 marked.js（CDN），載入後 window.marked 可用
@@ -796,7 +796,7 @@ function ListPage(){
     {title:'資料夾',dataIndex:'category',key:'category',width:colWidths.category,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('category',w);}};},sorter:function(a,b){return ((a.category&&a.category.name)||'').localeCompare((b.category&&b.category.name)||'','zh-TW');},render:function(cat){return cat?h(Tag,{color:'geekblue',style:{fontSize:14}},cat.name||'-'):h('span',{style:{color:'#bbb',fontSize:14}},'（無）');}},
     {title:'文件類型',dataIndex:'type',key:'type',width:colWidths.type,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('type',w);}};},sorter:function(a,b){return ((a.type&&a.type.name)||'').localeCompare((b.type&&b.type.name)||'','zh-TW');},render:function(t){return t?h(Tag,{color:'blue',style:{fontSize:14}},t.name||t):'-';}},
     {title:'狀態',dataIndex:'status',key:'status',width:colWidths.status,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('status',w);}};},sorter:function(a,b){return (a.status||'').localeCompare(b.status||'');},render:function(s){
-      return h(Tag,{color:s==='published'?'green':'default',style:{fontSize:14}},(s==='published'?'Published':'Draft'));
+      return h(Tag,{color:s==='published'?'green':'orange',style:{fontSize:14}},(s==='published'?'已發布':'草稿'));
     }},
     {title:'最後更新',key:'upd',width:colWidths.upd,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('upd',w);}};},defaultSortOrder:'descend',sorter:function(a,b){return new Date(a.updatedAt||0)-new Date(b.updatedAt||0);},render:function(_,rec){
       var name=rec.lastEditor?(rec.lastEditor.nickname||rec.lastEditor.username||rec.lastEditor.email):null;
@@ -807,20 +807,20 @@ function ListPage(){
       );
     }},
     {title:'Git 同步',dataIndex:'gitSyncStatus',key:'gs',width:colWidths.gs,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('gs',w);}};},render:function(s,rec){return rec.githubRepo?syncBadge(s,rec):null;}},
-    {title:'操作',key:'actions',width:155,render:function(_,rec){
+    {title:'操作',key:'actions',width:90,render:function(_,rec){
       function goEdit(e){e.stopPropagation();navigate('/admin/doc-hub/edit/'+rec.id);}
-      function goHistory(e){e.stopPropagation();navigate('/admin/doc-hub/versions/'+rec.id);}
+      function goHistory(){navigate('/admin/doc-hub/versions/'+rec.id);}
+      var menuItems=h(Menu,{onClick:function(e){e.domEvent.stopPropagation();}},
+        h(Menu.Item,{key:'history',icon:h(HistoryOutlined),onClick:function(){goHistory();}},'版本歷史'),
+        h(Menu.Item,{key:'move',icon:h(SwapOutlined),onClick:function(){openMoveDoc(rec);}},'移動'),
+        rec.githubRepo&&h(Menu.Item,{key:'sync',icon:h(SyncOutlined),disabled:rec.status!=='published',onClick:function(e){e.domEvent.stopPropagation();setSyncDoc(rec);}},'同步 Git'),
+        h(Menu.Divider),
+        h(Menu.Item,{key:'delete',icon:h(DeleteOutlined),danger:true,onClick:function(e){e.domEvent.stopPropagation();setDeleteDoc(rec);}},'刪除')
+      );
       return h(Space,{size:4},
         h(Button,{size:'small',icon:h(EditOutlined),title:'編輯',onClick:goEdit}),
-        h(Button,{size:'small',icon:h(HistoryOutlined),title:'歷史',onClick:goHistory}),
-        h(Tooltip,{title:'移動到其他專案／資料夾'},
-          h(Button,{size:'small',icon:h(SwapOutlined),onClick:function(e){e.stopPropagation();openMoveDoc(rec);}})
-        ),
-        !!rec.githubRepo&&h(Tooltip,{title:rec.status!=='published'?'請先發布':'同步到 Git'},
-          h(Button,{size:'small',icon:h(SyncOutlined),disabled:rec.status!=='published',onClick:function(e){e.stopPropagation();setSyncDoc(rec);}})
-        ),
-        h(Tooltip,{title:'刪除文件'},
-          h(Button,{size:'small',danger:true,icon:h(DeleteOutlined),onClick:function(e){e.stopPropagation();setDeleteDoc(rec);}})
+        h(Dropdown,{overlay:menuItems,trigger:['click']},
+          h(Button,{size:'small',onClick:function(e){e.stopPropagation();}},'⋯')
         )
       );
     }}
@@ -1227,8 +1227,8 @@ function EditPage(){
     ),
 
     // GitHub 綁定 bar
-    h('div',{style:{borderBottom:'1px solid #f0f0f0',padding:'8px 24px',background:'#f6fff6',flexShrink:0,display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}},
-      h('span',{style:{fontSize:11,fontWeight:700,color:'#389e0d',flexShrink:0}},'🔗 GitHub 雙向同步'),
+    h('div',{style:{borderBottom:'1px solid #f0f0f0',padding:'8px 24px',background:'#fafafa',borderLeft:'4px solid #52c41a',flexShrink:0,display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}},
+      h('span',{style:{fontSize:11,fontWeight:700,color:'#52c41a',flexShrink:0}},'🔗 GitHub 雙向同步'),
       h('div',{style:{display:'flex',alignItems:'center',gap:6}},
         h('span',{style:{fontSize:11,color:'#667380',flexShrink:0}},'Repo'),
         h(Input,{value:form.githubRepo,onChange:function(e){setField('githubRepo',e.target.value);},
@@ -1621,7 +1621,7 @@ function ViewPage(){
     h('div',{style:{background:'#fff',borderBottom:'1px solid #f0f0f0',padding:'12px 32px',display:'flex',alignItems:'center',justifyContent:'space-between',position:'sticky',top:0,zIndex:10}},
       h(Space,null,
         h(Button,{icon:h(ArrowLeftOutlined),onClick:function(){navigate('/admin/doc-hub');}},'返回列表'),
-        doc&&h(Tag,{color:doc.status==='published'?'green':'default'},doc.status==='published'?'Published':'Draft')
+        doc&&h(Tag,{color:doc.status==='published'?'green':'orange'},doc.status==='published'?'已發布':'草稿')
       ),
       canEdit&&h(Button,{type:'primary',icon:h(EditOutlined),onClick:function(){navigate('/admin/doc-hub/edit/'+docId);}},'編輯')
     ),
@@ -1634,10 +1634,10 @@ function ViewPage(){
             // Meta
             h('div',{style:{display:'flex',gap:16,alignItems:'center',marginBottom:32,paddingBottom:16,borderBottom:'1px solid #ebedf0',flexWrap:'wrap'}},
               doc.type&&h(Tag,{color:'blue'},doc.type.name),
-              h('span',{style:{color:'#8c99ad',fontSize:12}},
+              h('span',{style:{color:'#595959',fontSize:12}},
                 '最後更新：'+(doc.updatedAt?new Date(doc.updatedAt).toLocaleString('zh-TW',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-')
               ),
-              doc.lastEditor&&h('span',{style:{color:'#8c99ad',fontSize:12,display:'flex',alignItems:'center',gap:4}},
+              doc.lastEditor&&h('span',{style:{color:'#595959',fontSize:12,display:'flex',alignItems:'center',gap:4}},
                 h(UserOutlined,{style:{fontSize:11}}),
                 '編輯者：'+(doc.lastEditor.nickname||doc.lastEditor.username||doc.lastEditor.email)
               )
