@@ -260,7 +260,7 @@ class PluginDocHubServer extends import_server.Plugin {
 
       if (isGitLab(repo)) {
         // GitLab API
-        const cleanRepo = repo.replace('https://' + GITLAB_HOST + '/', '').replace(GITLAB_HOST + '/', '');
+        const cleanRepo = repo.replace('https://' + GITLAB_HOST + '/', '').replace(GITLAB_HOST + '/', '').replace(/\.git$/, '');
         const encodedProject = encodeURIComponent(cleanRepo);
         const encodedFile = encodeURIComponent(filePath);
         const path = `/api/v4/projects/${encodedProject}/repository/files/${encodedFile}?ref=${branch}`;
@@ -283,7 +283,9 @@ class PluginDocHubServer extends import_server.Plugin {
       } else {
         // GitHub API
         return new Promise((resolve, reject) => {
-          const url = `https://api.github.com/repos/${repo}/contents/${filePath}${branch ? '?ref=' + branch : ''}`;
+          // repo 可能是完整 URL（https://github.com/owner/name）或 owner/name 短格式，統一轉成 owner/name
+          const repoPath = repo.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
+          const url = `https://api.github.com/repos/${repoPath}/contents/${filePath}${branch ? '?ref=' + branch : ''}`;
           const opts = { headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'User-Agent': 'DocHub', 'Accept': 'application/vnd.github.v3+json' } };
           https.get(url, opts, res => {
             let data = '';
