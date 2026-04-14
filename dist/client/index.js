@@ -38,6 +38,7 @@ var h=_React.createElement;
 var useState=_React.useState;
 var useEffect=_React.useEffect;
 var useCallback=_React.useCallback;
+var useRef=_React.useRef;
 var useParams=_rr.useParams;
 var useNavigate=_rr.useNavigate;
 var useLocation=_rr.useLocation||function(){return {search:window.location.search};};
@@ -1390,7 +1391,7 @@ function VersionPage(){
   var docId=params.id;
   var navigate=useNavigate();
   var client=useAPIClient();
-  var currentUser=useCurrentUserContext&&useCurrentUserContext();
+  var currentUser=useCurrentUser();
   var _v=useState([]);var versions=_v[0];var setVersions=_v[1];
   var _l=useState(true);var loading=_l[0];var setLoading=_l[1];
   var _sel=useState(null);var selected=_sel[0];var setSelected=_sel[1];
