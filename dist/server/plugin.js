@@ -225,7 +225,8 @@ class PluginDocHubServer extends import_server.Plugin {
       const currentUser = await getCurrentUser(ctx);
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('docDocuments');
-      const appends = ctx.action.params.appends || [];
+      const paramAppends = ctx.action.params.appends || [];
+      const appends = [...new Set([...paramAppends, 'viewers', 'editors', 'subscribers'])];
 
       const doc = await repo.findOne({ filterByTk, appends });
       if (!doc) { ctx.throw(404, '文件不存在'); return; }
@@ -304,14 +305,24 @@ class PluginDocHubServer extends import_server.Plugin {
       await getCurrentUser(ctx); // 確保 ctx.state.currentUser 被設置（public ACL 需要）
       const values = ctx.request.body || {};
       const repo = ctx.db.getRepository('docDocuments');
-      const { title, categoryId = null, projectId = null } = values;
+      const { title, categoryId = null, projectId = null, viewerIds, editorIds, subscriberIds, ...docFields } = values;
       if (title && title.trim()) {
         const filter = { title: title.trim(), categoryId: categoryId || null };
         if (projectId) filter.projectId = projectId;
         const dup = await repo.findOne({ filter });
         if (dup) { ctx.throw(400, `文件「${title.trim()}」已存在於此資料夾，請使用不同標題`); return; }
       }
-      const doc = await repo.create({ values: { ...values, authorId: ctx.state?.currentUser?.id, lastEditorId: ctx.state?.currentUser?.id } });
+      const doc = await repo.create({ values: { ...docFields, title, categoryId, projectId, authorId: ctx.state?.currentUser?.id, lastEditorId: ctx.state?.currentUser?.id } });
+      // 設定 m2m 關聯（viewers/editors/subscribers）
+      if (Array.isArray(viewerIds) && viewerIds.length > 0) {
+        await ctx.db.getRepository('docDocuments.viewers', doc.id).set(viewerIds);
+      }
+      if (Array.isArray(editorIds) && editorIds.length > 0) {
+        await ctx.db.getRepository('docDocuments.editors', doc.id).set(editorIds);
+      }
+      if (Array.isArray(subscriberIds) && subscriberIds.length > 0) {
+        await ctx.db.getRepository('docDocuments.subscribers', doc.id).set(subscriberIds);
+      }
       ctx.body = doc;
       await next();
     });
@@ -671,7 +682,47 @@ class PluginDocHubServer extends import_server.Plugin {
           });
         } catch(e) { this.logger.warn('set createdById failed: ' + e.message); }
       }
-      // 建立 v1
+
+      // 建立時若已綁定 git repo，自動拉取內容
+      if (model.githubRepo) {
+        try {
+          const filePath = model.githubFilePath || 'README.md';
+          const branch = model.githubBranch || 'main';
+          const ghFile = await githubGetFile(model.githubRepo, filePath, branch);
+          let content = null;
+          let sha = null;
+          if (ghFile && !ghFile.message) {
+            // GitHub: content is base64, sha is direct
+            const rawContent = ghFile.content || '';
+            const decoded = Buffer.from(rawContent.replace(/\n/g, ''), 'base64').toString('utf8');
+            content = decoded;
+            sha = ghFile.sha;
+          } else if (ghFile && ghFile.content !== undefined && ghFile.sha) {
+            // GitLab: already handled in githubGetFile (content is base64, sha is blob_id)
+            const decoded = Buffer.from(ghFile.content.replace(/\n/g, ''), 'base64').toString('utf8');
+            content = decoded;
+            sha = ghFile.sha;
+          }
+          if (content !== null) {
+            await this.db.getRepository('docDocuments').update({
+              filterByTk: model.id,
+              values: { content, gitSha: sha, gitSyncStatus: 'synced', gitLastSyncAt: new Date() },
+            });
+            // 建立 v1（用拉取的內容）
+            try {
+              const vRepo = this.db.getRepository('docVersions');
+              await vRepo.create({ values: { documentId: model.id, content, changeSummary: '初始版本（從 Git 拉取）', versionNumber: 1, editorId: currentUser?.id } });
+            } catch (err) { this.logger.error('v1 create failed: ' + err.message); }
+            return;
+          } else {
+            this.logger.warn('afterCreate auto-pull: git returned error: ' + (ghFile?.message || 'unknown'));
+          }
+        } catch (err) {
+          this.logger.warn('afterCreate auto-pull failed: ' + err.message);
+        }
+      }
+
+      // 建立 v1（無 git 或拉取失敗時）
       if (!model.content) return;
       try {
         const vRepo = this.db.getRepository('docVersions');
