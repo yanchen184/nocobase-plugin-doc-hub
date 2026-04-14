@@ -43,7 +43,7 @@ var useParams=_rr.useParams;
 var useNavigate=_rr.useNavigate;
 var useLocation=_rr.useLocation||function(){return {search:window.location.search};};
 
-var Table=_antd.Table,Button=_antd.Button,Input=_antd.Input,Select=_antd.Select,Modal=_antd.Modal,Tag=_antd.Tag,Space=_antd.Space,Spin=_antd.Spin,message=_antd.message,Typography=_antd.Typography,Tooltip=_antd.Tooltip,Badge=_antd.Badge,Row=_antd.Row,Col=_antd.Col,Alert=_antd.Alert,Empty=_antd.Empty,Divider=_antd.Divider,Avatar=_antd.Avatar,Popover=_antd.Popover,Dropdown=_antd.Dropdown,Menu=_antd.Menu;
+var Table=_antd.Table,Button=_antd.Button,Input=_antd.Input,Select=_antd.Select,Modal=_antd.Modal,Tag=_antd.Tag,Space=_antd.Space,Spin=_antd.Spin,message=_antd.message,Typography=_antd.Typography,Tooltip=_antd.Tooltip,Badge=_antd.Badge,Row=_antd.Row,Col=_antd.Col,Alert=_antd.Alert,Empty=_antd.Empty,Divider=_antd.Divider,Avatar=_antd.Avatar,Popover=_antd.Popover,Dropdown=_antd.Dropdown,Menu=_antd.Menu,Collapse=_antd.Collapse;
 var PlusOutlined=_icons.PlusOutlined,SearchOutlined=_icons.SearchOutlined,HistoryOutlined=_icons.HistoryOutlined,EditOutlined=_icons.EditOutlined,SyncOutlined=_icons.SyncOutlined,ExclamationCircleOutlined=_icons.ExclamationCircleOutlined,FolderOutlined=_icons.FolderOutlined,FileTextOutlined=_icons.FileTextOutlined,ArrowLeftOutlined=_icons.ArrowLeftOutlined,UserOutlined=_icons.UserOutlined,BoldOutlined=_icons.BoldOutlined,ItalicOutlined=_icons.ItalicOutlined,UnderlineOutlined=_icons.UnderlineOutlined,LinkOutlined=_icons.LinkOutlined,CodeOutlined=_icons.CodeOutlined,OrderedListOutlined=_icons.OrderedListOutlined,UnorderedListOutlined=_icons.UnorderedListOutlined,DeleteOutlined=_icons.DeleteOutlined,SwapOutlined=_icons.SwapOutlined,InfoCircleOutlined=_icons.InfoCircleOutlined;
 
 // 動態載入 marked.js（CDN），載入後 window.marked 可用
@@ -692,14 +692,14 @@ function ListPage(){
     var t=setTimeout(function(){setDebouncedSearch(search);},400);
     return function(){clearTimeout(t);};
   },[search]);
-  var _dl=useDocList(debouncedSearch,activeCatId,typeTab==='all'?null:typeTab,sf,activeProjectId);
+  var _dl=useDocList(debouncedSearch,activeCatId,null,sf,activeProjectId);
   var docs=_dl.data;var loading=_dl.loading;var reload=_dl.reload;
   var client=useAPIClient();
   var navigate=useNavigate();
   var docTypes=useOptions('docTypes');
   var allProjectsList=useOptions('docProjects');
   var allCatsList=useOptions('docCategories');
-  var filtered=docs;
+  var filtered=typeTab==='all'?docs:docs.filter(function(d){return d.type&&String(d.type.id)===typeTab;});
 
   function confirmSync(){
     if(!syncDoc||!client)return;
@@ -861,11 +861,19 @@ function ListPage(){
         h('div',{style:{display:'flex',gap:24,borderBottom:'2px solid #ebedf0',marginBottom:0}},
           tabs.map(function(tab){
             var isActive=typeTab===tab.key;
+            var count=tab.key==='all'?docs.length:docs.filter(function(d){return d.type&&String(d.type.id)===tab.key;}).length;
             return h('div',{key:tab.key,
               style:{padding:'8px 0',fontSize:14,fontWeight:isActive?600:400,color:isActive?'#1677ff':'#73808c',
                 borderBottom:isActive?'2px solid #1677ff':'2px solid transparent',marginBottom:-2,cursor:'pointer'},
               onClick:function(){setTypeTab(tab.key);}},
-              tab.label
+              h('span',{style:{display:'inline-flex',alignItems:'center',gap:6}},
+                tab.label,
+                h('span',{style:{fontSize:11,padding:'0 5px',borderRadius:8,
+                  background:isActive?'#e6f4ff':'#f0f0f0',
+                  color:isActive?'#1677ff':'#8c8c8c'}},
+                  count
+                )
+              )
             );
           })
         )
@@ -1250,18 +1258,22 @@ function EditPage(){
       form.githubRepo&&h(Button,{size:'small',icon:h(SyncOutlined),onClick:doPullFromGit,loading:pulling,style:{fontSize:11}},isNew?'從 Git 拉取內容':'從 Git 拉取最新')
     ),
 
-    // Permissions
-    h('div',{style:{borderBottom:'1px solid #f0f0f0',padding:'12px 24px',background:'#fafcff',flexShrink:0}},
-      h('div',{style:{display:'flex',gap:40}},
-        h(PermissionPanel,{label:'Viewers',hint:'僅讀取權限。Editors / Subscribers 已自動包含讀取，通常只有「純看」的人才需要特別加這裡。',members:viewers,allUsers:allUsers,
-          onAdd:function(u){setViewers(function(v){return v.find(function(x){return x.id===u.id;})?v:v.concat([u]);});},
-          onRemove:function(u){setViewers(function(v){return v.filter(function(x){return x.id!==u.id;});});}}),
-        h(PermissionPanel,{label:'Editors',hint:'可編輯，自動具備讀取權限',members:editors,allUsers:allUsers,
-          onAdd:function(u){setEditors(function(v){return v.find(function(x){return x.id===u.id;})?v:v.concat([u]);});},
-          onRemove:function(u){setEditors(function(v){return v.filter(function(x){return x.id!==u.id;});});}}),
-        h(PermissionPanel,{label:'Subscribers',hint:'異動時自動收站內通知，自動具備讀取權限',members:subscribers,allUsers:allUsers,
-          onAdd:function(u){setSubscribers(function(v){return v.find(function(x){return x.id===u.id;})?v:v.concat([u]);});},
-          onRemove:function(u){setSubscribers(function(v){return v.filter(function(x){return x.id!==u.id;});});}})
+    // Permissions (collapsible)
+    h('div',{style:{borderBottom:'1px solid #f0f0f0',padding:'4px 24px',background:'#fafcff',flexShrink:0}},
+      h(Collapse,{ghost:true,style:{marginBottom:0,border:'1px solid #f0f0f0',borderRadius:4},defaultActiveKey:[]},
+        h(Collapse.Panel,{key:'perm',header:h('span',{style:{fontSize:13,color:'#595959',fontWeight:500}},'\uD83D\uDC65 權限設定（Viewers / Editors / Subscribers）')},
+          h('div',{style:{display:'flex',gap:40}},
+            h(PermissionPanel,{label:'Viewers',hint:'僅讀取權限。Editors / Subscribers 已自動包含讀取，通常只有「純看」的人才需要特別加這裡。',members:viewers,allUsers:allUsers,
+              onAdd:function(u){setViewers(function(v){return v.find(function(x){return x.id===u.id;})?v:v.concat([u]);});},
+              onRemove:function(u){setViewers(function(v){return v.filter(function(x){return x.id!==u.id;});});}}),
+            h(PermissionPanel,{label:'Editors',hint:'可編輯，自動具備讀取權限',members:editors,allUsers:allUsers,
+              onAdd:function(u){setEditors(function(v){return v.find(function(x){return x.id===u.id;})?v:v.concat([u]);});},
+              onRemove:function(u){setEditors(function(v){return v.filter(function(x){return x.id!==u.id;});});}}),
+            h(PermissionPanel,{label:'Subscribers',hint:'異動時自動收站內通知，自動具備讀取權限',members:subscribers,allUsers:allUsers,
+              onAdd:function(u){setSubscribers(function(v){return v.find(function(x){return x.id===u.id;})?v:v.concat([u]);});},
+              onRemove:function(u){setSubscribers(function(v){return v.filter(function(x){return x.id!==u.id;});});}})
+          )
+        )
       )
     ),
 
@@ -1625,30 +1637,64 @@ function ViewPage(){
       ),
       canEdit&&h(Button,{type:'primary',icon:h(EditOutlined),onClick:function(){navigate('/admin/doc-hub/edit/'+docId);}},'編輯')
     ),
-    // Content
-    h('div',{style:{maxWidth:860,width:'100%',margin:'0 auto',padding:'40px 32px',flex:1}},
-      doc
-        ? h('div',null,
-            // Title
-            h('h1',{style:{fontSize:28,fontWeight:700,color:'#1a1f26',marginBottom:8,lineHeight:1.3}},doc.title),
-            // Meta
-            h('div',{style:{display:'flex',gap:16,alignItems:'center',marginBottom:32,paddingBottom:16,borderBottom:'1px solid #ebedf0',flexWrap:'wrap'}},
-              doc.type&&h(Tag,{color:'blue'},doc.type.name),
-              h('span',{style:{color:'#595959',fontSize:12}},
-                '最後更新：'+(doc.updatedAt?new Date(doc.updatedAt).toLocaleString('zh-TW',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-')
-              ),
-              doc.lastEditor&&h('span',{style:{color:'#595959',fontSize:12,display:'flex',alignItems:'center',gap:4}},
-                h(UserOutlined,{style:{fontSize:11}}),
-                '編輯者：'+(doc.lastEditor.nickname||doc.lastEditor.username||doc.lastEditor.email)
+    // Content + TOC
+    (function(){
+      var headings=doc&&doc.content?(doc.content.match(/^#{1,3}\s+.+/gm)||[]):[];
+      var showToc=headings.length>0&&typeof window!=='undefined'&&window.innerWidth>=1100;
+      return h('div',{style:{maxWidth:1100,width:'100%',margin:'0 auto',padding:'40px 32px',flex:1,display:'flex',gap:32,alignItems:'flex-start'}},
+        // Left: main content
+        h('div',{style:{maxWidth:860,flex:1,minWidth:0}},
+          doc
+            ? h('div',null,
+                // Title
+                h('h1',{style:{fontSize:28,fontWeight:700,color:'#1a1f26',marginBottom:8,lineHeight:1.3}},doc.title),
+                // Meta
+                h('div',{style:{display:'flex',gap:16,alignItems:'center',marginBottom:32,paddingBottom:16,borderBottom:'1px solid #ebedf0',flexWrap:'wrap'}},
+                  doc.type&&h(Tag,{color:'blue'},doc.type.name),
+                  h('span',{style:{color:'#595959',fontSize:12}},
+                    '最後更新：'+(doc.updatedAt?new Date(doc.updatedAt).toLocaleString('zh-TW',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'-')
+                  ),
+                  doc.lastEditor&&h('span',{style:{color:'#595959',fontSize:12,display:'flex',alignItems:'center',gap:4}},
+                    h(UserOutlined,{style:{fontSize:11}}),
+                    '編輯者：'+(doc.lastEditor.nickname||doc.lastEditor.username||doc.lastEditor.email)
+                  )
+                ),
+                // Body
+                doc.content
+                  ? h('div',{key:String(markedReady),className:'dochub-preview',style:{fontSize:15,lineHeight:1.85,color:'#2c3340',fontFamily:'system-ui,sans-serif',wordBreak:'break-word'},dangerouslySetInnerHTML:{__html:renderMarkdown(doc.content)}})
+                  : h('div',{style:{color:'#bbb',fontSize:14,padding:'40px 0',textAlign:'center'}},'（此文件尚無內容）')
               )
-            ),
-            // Body
-            doc.content
-              ? h('div',{key:String(markedReady),className:'dochub-preview',style:{fontSize:15,lineHeight:1.85,color:'#2c3340',fontFamily:'system-ui,sans-serif',wordBreak:'break-word'},dangerouslySetInnerHTML:{__html:renderMarkdown(doc.content)}})
-              : h('div',{style:{color:'#bbb',fontSize:14,padding:'40px 0',textAlign:'center'}},'（此文件尚無內容）')
+            : h('div',{style:{textAlign:'center',padding:80,color:'#999'}},'文件不存在')
+        ),
+        // Right: TOC
+        showToc&&h('div',{style:{width:200,flexShrink:0,position:'sticky',top:80,maxHeight:'calc(100vh - 120px)',overflowY:'auto'}},
+          h('div',{style:{fontSize:13,fontWeight:600,color:'#1a1f26',marginBottom:8,paddingBottom:6,borderBottom:'1px solid #ebedf0'}},'目錄'),
+          h('div',{style:{display:'flex',flexDirection:'column',gap:2}},
+            headings.map(function(raw,i){
+              var level=raw.match(/^(#+)/)[1].length;
+              var text=raw.replace(/^#+\s+/,'');
+              return h('a',{key:i,
+                style:{fontSize:12,color:'#595959',textDecoration:'none',padding:'3px 0',paddingLeft:(level-1)*12,cursor:'pointer',
+                  display:'block',borderLeft:'2px solid transparent',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'},
+                title:text,
+                onClick:function(e){
+                  e.preventDefault();
+                  var tag='h'+level;
+                  var els=document.querySelectorAll('.dochub-preview '+tag);
+                  for(var j=0;j<els.length;j++){
+                    if(els[j].textContent.trim()===text){
+                      els[j].scrollIntoView({behavior:'smooth',block:'start'});
+                      break;
+                    }
+                  }
+                }},
+                text
+              );
+            })
           )
-        : h('div',{style:{textAlign:'center',padding:80,color:'#999'}},'文件不存在')
-    )
+        )
+      );
+    })()
   );
 }
 
