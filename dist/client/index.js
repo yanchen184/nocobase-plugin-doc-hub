@@ -196,6 +196,9 @@ function DocSidebar(props){
   var _ccn=useState('');var newCatName=_ccn[0];var setNewCatName=_ccn[1];
   var _ccs=useState(false);var creatingCat=_ccs[0];var setCreatingCat=_ccs[1];
 
+  // Project expanded state（預設展開，false 才收起）
+  var _pe=useState({});var expandedProj=_pe[0];var setExpandedProj=_pe[1];
+
   // Delete Project confirm modal
   var _dp=useState(null);var deleteProj=_dp[0];var setDeleteProj=_dp[1]; // null = hidden, proj obj = open
   var _dps=useState(false);var deletingProj=_dps[0];var setDeletingProj=_dps[1];
@@ -379,15 +382,23 @@ function DocSidebar(props){
 
   function renderProject(proj){
     var isProjActive=activeProjectId===proj.id;
+    var isProjExp=expandedProj[proj.id]!==false; // 預設展開
     return h('div',{key:proj.id},
       h('div',{
-        style:{padding:'8px 16px 8px 28px',display:'flex',alignItems:'center',justifyContent:'space-between',cursor:'pointer',
+        style:{padding:'8px 16px 8px 12px',display:'flex',alignItems:'center',justifyContent:'space-between',cursor:'pointer',
           color:isProjActive?'#fff':'#d9e0eb',fontSize:15,fontWeight:600,
           background:isProjActive?'rgba(22,136,255,0.2)':'transparent',
           borderLeft:isProjActive?'3px solid #1688ff':'3px solid transparent',
-          transition:'background 0.15s'},
-        onClick:function(){onSelectProject(isProjActive?null:proj.id);onSelectCat(null);}},
-        h('span',{style:{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},'📁 ',proj.name),
+          transition:'background 0.15s'}},
+        // 展開/收合箭頭
+        h('span',{
+          onClick:function(e){e.stopPropagation();setExpandedProj(function(prev){var n=Object.assign({},prev);n[proj.id]=!isProjExp;return n;});},
+          style:{color:'#6b8299',fontSize:10,cursor:'pointer',padding:'0 4px 0 0',userSelect:'none',flexShrink:0,lineHeight:1}
+        },isProjExp?'▾':'▸'),
+        h('span',{
+          style:{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'},
+          onClick:function(){onSelectProject(isProjActive?null:proj.id);onSelectCat(null);}
+        },'📁 ',proj.name),
         h('div',{style:{display:'flex',alignItems:'center',gap:4,flexShrink:0}},
           h('span',{style:{background:isProjActive?'#1688ff':'#2a4060',borderRadius:9,padding:'1px 7px',fontSize:12,color:'#fff',fontWeight:600}},
             docCount[proj.id]!=null?docCount[proj.id]:'…'),
@@ -401,8 +412,8 @@ function DocSidebar(props){
             style:{color:'#8c4444',fontSize:12,cursor:'pointer',padding:'0 2px',lineHeight:1,opacity:0.6}},'×')
         )
       ),
-      // 遞迴資料夾樹（從根節點 parentId=null 開始）
-      renderCatTree(null, proj.id, 0)
+      // 資料夾樹，可收合
+      isProjExp&&renderCatTree(null, proj.id, 0)
     );
   }
 
@@ -442,6 +453,9 @@ function DocSidebar(props){
               var collapsed={};
               cats.forEach(function(c){collapsed[c.id]=false;});
               setExpanded(collapsed);
+              var collapsedProj={};
+              projects.forEach(function(p){collapsedProj[p.id]=false;});
+              setExpandedProj(collapsedProj);
             },
             style:{color:'#6b8299',fontSize:11,cursor:'pointer',padding:'1px 4px',lineHeight:1,
               border:'1px solid #33475c',borderRadius:3,userSelect:'none',letterSpacing:'0.3px'}
@@ -759,7 +773,7 @@ function ListPage(){
         name&&h('div',{style:{fontSize:14,color:'#8c99ad',marginTop:2}},h(UserOutlined,{style:{marginRight:3}}),name)
       );
     }},
-    {title:'Git 同步',dataIndex:'gitSyncStatus',key:'gs',width:colWidths.gs,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('gs',w);}};},render:function(s,rec){return (rec.githubRepo&&rec.githubFilePath)?syncBadge(s):null;}},
+    {title:'Git 同步',dataIndex:'gitSyncStatus',key:'gs',width:colWidths.gs,onHeaderCell:function(col){return{width:col.width,onResize:function(w){setColWidth('gs',w);}};},render:function(s,rec){return rec.githubRepo?syncBadge(s):null;}},
     {title:'操作',key:'actions',width:155,render:function(_,rec){
       function goEdit(e){e.stopPropagation();navigate('/admin/doc-hub/edit/'+rec.id);}
       function goHistory(e){e.stopPropagation();navigate('/admin/doc-hub/versions/'+rec.id);}
@@ -769,7 +783,7 @@ function ListPage(){
         h(Tooltip,{title:'移動到其他專案／資料夾'},
           h(Button,{size:'small',icon:h(SwapOutlined),onClick:function(e){e.stopPropagation();openMoveDoc(rec);}})
         ),
-        !!(rec.githubRepo&&rec.githubFilePath)&&h(Tooltip,{title:rec.status!=='published'?'請先發布':'同步到 Git'},
+        !!rec.githubRepo&&h(Tooltip,{title:rec.status!=='published'?'請先發布':'同步到 Git'},
           h(Button,{size:'small',icon:h(SyncOutlined),disabled:rec.status!=='published',onClick:function(e){e.stopPropagation();setSyncDoc(rec);}})
         ),
         h(Tooltip,{title:'刪除文件'},
@@ -1131,7 +1145,7 @@ function EditPage(){
       h(Space,null,
         h(Button,{loading:saving,onClick:handleSave},'儲存'),
         h(Button,{type:'primary',style:{background:'#52c41a',borderColor:'#52c41a'},loading:saving,onClick:handlePublish},'發布'),
-        !!(form.githubRepo&&form.githubFilePath)&&h(Tooltip,{title:isNew?'請先儲存':(!isPublished?'請先發布':'同步到 Git')},
+        !!form.githubRepo&&h(Tooltip,{title:isNew?'請先儲存':(!isPublished?'請先發布':'同步到 Git')},
           h(Button,{type:'primary',icon:h(SyncOutlined),disabled:isNew||!isPublished,onClick:function(){setShowSync(true);}},'同步 Git')
         )
       )
@@ -1185,7 +1199,7 @@ function EditPage(){
           placeholder:'master / main（預設 master）',
           size:'small',style:{width:200,fontSize:12}})
       ),
-      form.githubRepo&&form.githubFilePath&&h(Button,{size:'small',icon:h(SyncOutlined),onClick:doPullFromGit,loading:pulling,style:{fontSize:11}},isNew?'從 Git 拉取內容':'從 Git 拉取最新')
+      form.githubRepo&&h(Button,{size:'small',icon:h(SyncOutlined),onClick:doPullFromGit,loading:pulling,style:{fontSize:11}},isNew?'從 Git 拉取內容':'從 Git 拉取最新')
     ),
 
     // Permissions

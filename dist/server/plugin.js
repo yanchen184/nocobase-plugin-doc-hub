@@ -426,9 +426,10 @@ class PluginDocHubServer extends import_server.Plugin {
       const githubFilePath = body.githubFilePath || params.githubFilePath;
       const branch = body.branch || body.githubBranch || params.branch || 'master';
       this.logger.info(`[DocHub] fetchFromGit: repo=${githubRepo} path=${githubFilePath} branch=${branch} rawBody=${JSON.stringify(rawBody)}`);
-      if (!githubRepo || !githubFilePath) ctx.throw(400, '請提供 repo 和 filePath');
+      const resolvedFilePath = githubFilePath || 'README.md';
+      if (!githubRepo) ctx.throw(400, '請提供 repo');
       try {
-        const ghFile = await githubGetFile(githubRepo, githubFilePath, branch);
+        const ghFile = await githubGetFile(githubRepo, resolvedFilePath, branch);
         this.logger.info(`[DocHub] fetchFromGit result: ${JSON.stringify({sha: ghFile?.sha, hasContent: !!ghFile?.content, message: ghFile?.message})}`);
         if (!ghFile || !ghFile.content) {
           const errMsg = ghFile?.message || '找不到檔案（請確認 repo / 路徑 / 分支是否正確）';
