@@ -705,6 +705,24 @@ class PluginDocHubServer extends import_server.Plugin {
     this.app.acl.allow('docProjects', ['list', 'get', 'create', 'update', 'destroy', 'syncToGit'], 'public');
     this.app.acl.allow('docGroups', ['list', 'get', 'create', 'update', 'destroy'], 'public');
     this.app.acl.allow('docCategories', ['list', 'get', 'create', 'update', 'destroy', 'reorder'], 'public');
+    this.app.acl.allow('docVersions', ['list', 'updateSummary'], 'public');
+
+    // 版本摘要修改：只有版本的 editorId 或 admin 可修改 changeSummary
+    this.app.resourceManager.registerActionHandler('docVersions:updateSummary', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      const { filterByTk } = ctx.action.params;
+      const body = ctx.request.body || {};
+      const changeSummary = (body.changeSummary || '').trim();
+      const vRepo = this.db.getRepository('docVersions');
+      const ver = await vRepo.findOne({ filterByTk });
+      if (!ver) { ctx.throw(404, '版本不存在'); return; }
+      if (!isAdmin(currentUser) && Number(ver.editorId) !== Number(currentUser.id)) {
+        ctx.throw(403, '只有修改者或管理員可以編輯版本摘要'); return;
+      }
+      await vRepo.update({ filterByTk, values: { changeSummary } });
+      ctx.body = { ok: true, changeSummary };
+    });
 
     // 自動版本記錄 + 訂閱者通知
     this.db.on('docDocuments.afterCreate', async (model, options) => {

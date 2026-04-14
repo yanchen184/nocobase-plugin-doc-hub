@@ -1390,10 +1390,43 @@ function VersionPage(){
   var docId=params.id;
   var navigate=useNavigate();
   var client=useAPIClient();
+  var currentUser=useCurrentUserContext&&useCurrentUserContext();
   var _v=useState([]);var versions=_v[0];var setVersions=_v[1];
   var _l=useState(true);var loading=_l[0];var setLoading=_l[1];
   var _sel=useState(null);var selected=_sel[0];var setSelected=_sel[1];
+  var _editId=useState(null);var editingVerId=_editId[0];var setEditingVerId=_editId[1];
+  var _editVal=useState('');var editingVal=_editVal[0];var setEditingVal=_editVal[1];
+  var _saving=useState(false);var summSaving=_saving[0];var setSummSaving=_saving[1];
   var _dl=useDoc(docId);var doc=_dl.doc;
+  var cu=(currentUser&&(currentUser.data||currentUser))||null;
+  var cuId=cu&&(cu.id||cu.data&&cu.data.id);
+  var isAdminUser=cuId&&(Number(cuId)===1||(cu.roles&&cu.roles.some&&cu.roles.some(function(r){return r.name==='root'||r.name==='admin';})));
+
+  function canEditSummary(ver){
+    if(isAdminUser)return true;
+    return ver.editorId&&cuId&&Number(ver.editorId)===Number(cuId);
+  }
+
+  function startEditSummary(e,ver){
+    e.stopPropagation();
+    setEditingVerId(ver.id);
+    setEditingVal(ver.changeSummary||'');
+  }
+
+  function saveSummary(ver){
+    if(!client)return;
+    setSummSaving(true);
+    client.request({url:'docVersions:updateSummary',method:'post',params:{filterByTk:ver.id},data:{changeSummary:editingVal}})
+      .then(function(){
+        setVersions(function(vs){return vs.map(function(v){return v.id===ver.id?Object.assign({},v,{changeSummary:editingVal}):v;});});
+        if(selected&&selected.id===ver.id)setSelected(function(s){return Object.assign({},s,{changeSummary:editingVal});});
+        setEditingVerId(null);setSummSaving(false);
+      })
+      .catch(function(err){
+        var msg=err&&err.response&&err.response.data&&err.response.data.errors&&err.response.data.errors[0]&&err.response.data.errors[0].message;
+        message.error(msg||'儲存失敗');setSummSaving(false);
+      });
+  }
 
   useEffect(function(){
     if(!client||!docId||docId==='new')return;
@@ -1459,7 +1492,31 @@ function VersionPage(){
                 h('div',{style:{fontSize:12,color:'#73808c',marginTop:2}},
                   h(UserOutlined,{style:{marginRight:4,fontSize:11}}),editorName
                 ),
-                ver.changeSummary&&h('div',{style:{fontSize:11,color:'#a0aab5',marginTop:3,whiteSpace:'pre-wrap',wordBreak:'break-word'}},ver.changeSummary)
+                editingVerId===ver.id
+                  ?h('div',{style:{marginTop:6},onClick:function(e){e.stopPropagation();}},
+                    h(Input.TextArea,{
+                      value:editingVal,
+                      onChange:function(e){setEditingVal(e.target.value);},
+                      autoSize:{minRows:2,maxRows:6},
+                      placeholder:'輸入版本摘要…',
+                      style:{fontSize:11,marginBottom:4}
+                    }),
+                    h('div',{style:{display:'flex',gap:4,justifyContent:'flex-end'}},
+                      h(Button,{size:'small',onClick:function(e){e.stopPropagation();setEditingVerId(null);}}, '取消'),
+                      h(Button,{size:'small',type:'primary',loading:summSaving,onClick:function(e){e.stopPropagation();saveSummary(ver);}}, '儲存')
+                    )
+                  )
+                  :h('div',{style:{marginTop:3,display:'flex',alignItems:'flex-start',gap:4}},
+                    (ver.changeSummary||canEditSummary(ver))&&h('div',{style:{flex:1,fontSize:11,color:'#a0aab5',whiteSpace:'pre-wrap',wordBreak:'break-word'}},
+                      ver.changeSummary||(canEditSummary(ver)?h('span',{style:{color:'#c0c8d0',fontStyle:'italic'}},'點擊鉛筆新增摘要'):null)
+                    ),
+                    canEditSummary(ver)&&h(Button,{
+                      type:'text',size:'small',
+                      icon:h(EditOutlined),
+                      style:{padding:'0 2px',height:16,minWidth:16,fontSize:11,color:'#bbb',flexShrink:0},
+                      onClick:function(e){startEditSummary(e,ver);}
+                    })
+                  )
               );
             })
       ),
