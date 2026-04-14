@@ -217,6 +217,8 @@ function DocSidebar(props){
 
   // Drag Category (同層排序)
   var _dcat=useState(null);var dragCatId=_dcat[0];var setDragCatId=_dcat[1];
+  var _dov=useState(null);var dragOverCatId=_dov[0];var setDragOverCatId=_dov[1];
+  var _dragRef=useRef({timer:null,active:false,catId:null,projId:null,parentId:null});
 
   var isAdmin=!!(currentUser&&(currentUser.id===1||
     (currentUser.roles&&currentUser.roles.some(function(r){return r.name==='root'||r.name==='admin';}))));
@@ -322,34 +324,60 @@ function DocSidebar(props){
       var isActive=String(activeCatId)===String(cat.id);
       var isExp=expanded[cat.id]!==false; // 預設展開，false 才收起
       var isRenaming=renamingCatId===cat.id;
+      var isDraggingThis=dragCatId===cat.id;
+      var isDragOver=dragOverCatId===cat.id&&!isDraggingThis;
+      function handleCatMouseDown(e){
+        if(isRenaming||e.button!==0)return;
+        var ref=_dragRef.current;
+        ref.catId=cat.id;ref.projId=projId;ref.parentId=cat.parentId;ref.active=false;
+        ref.timer=setTimeout(function(){
+          ref.active=true;
+          setDragCatId(cat.id);
+          function onMouseMove(ev){
+            // 找滑鼠下方的 cat element
+            var els=document.elementsFromPoint(ev.clientX,ev.clientY);
+            var overEl=els.find(function(el){return el.dataset&&el.dataset.catid&&el.dataset.catid!==String(cat.id);});
+            setDragOverCatId(overEl?Number(overEl.dataset.catid):null);
+          }
+          function onMouseUp(){
+            document.removeEventListener('mousemove',onMouseMove);
+            document.removeEventListener('mouseup',onMouseUp);
+            var overCatId=_dragRef.current.overCatId;
+            setDragCatId(null);setDragOverCatId(null);_dragRef.current.active=false;
+            if(!overCatId||overCatId===cat.id||!client)return;
+            var siblings=cats.filter(function(c){return c.projectId===ref.projId&&c.parentId===ref.parentId;});
+            var fromIdx=siblings.findIndex(function(c){return c.id===cat.id;});
+            var toIdx=siblings.findIndex(function(c){return c.id===overCatId;});
+            if(fromIdx===-1||toIdx===-1)return;
+            var newOrder=siblings.slice();
+            var moved=newOrder.splice(fromIdx,1)[0];
+            newOrder.splice(toIdx,0,moved);
+            client.request({url:'docCategories:reorder',method:'post',data:{ids:newOrder.map(function(c){return c.id;})}})
+              .then(function(){loadSidebar();}).catch(function(){message.error('排序儲存失敗');});
+          }
+          document.addEventListener('mousemove',onMouseMove);
+          document.addEventListener('mouseup',onMouseUp);
+        },250);
+        function onEarlyUp(){
+          clearTimeout(ref.timer);
+          document.removeEventListener('mouseup',onEarlyUp);
+        }
+        document.addEventListener('mouseup',onEarlyUp);
+      }
       return h('div',{key:cat.id,
-        draggable:!isRenaming,
-        onDragStart:function(e){e.dataTransfer.effectAllowed='move';e.stopPropagation();setDragCatId(cat.id);},
-        onDragOver:function(e){e.preventDefault();e.stopPropagation();e.dataTransfer.dropEffect='move';},
-        onDrop:function(e){
-          e.preventDefault();e.stopPropagation();
-          if(!dragCatId||dragCatId===cat.id||!client)return;
-          // 同層排序：找出同層的兄弟，重排後儲存
-          var siblings=cats.filter(function(c){return c.projectId===projId&&c.parentId===cat.parentId;});
-          var fromIdx=siblings.findIndex(function(c){return c.id===dragCatId;});
-          var toIdx=siblings.findIndex(function(c){return c.id===cat.id;});
-          if(fromIdx===-1||toIdx===-1){setDragCatId(null);return;}
-          var newOrder=siblings.slice();
-          var moved=newOrder.splice(fromIdx,1)[0];
-          newOrder.splice(toIdx,0,moved);
-          client.request({url:'docCategories:reorder',method:'post',data:{ids:newOrder.map(function(c){return c.id;})}})
-            .then(function(){loadSidebar();}).catch(function(){message.error('排序儲存失敗');});
-          setDragCatId(null);
-        },
-        onDragEnd:function(){setDragCatId(null);}
+        'data-catid':cat.id,
+        onMouseEnter:function(){if(_dragRef.current.active)_dragRef.current.overCatId=cat.id;},
+        onMouseLeave:function(){if(_dragRef.current.active&&_dragRef.current.overCatId===cat.id)_dragRef.current.overCatId=null;}
       },
         h('div',{
           style:{padding:'6px 16px 6px '+indent+'px',display:'flex',alignItems:'center',justifyContent:'space-between',
-            cursor:isRenaming?'text':'grab',
+            cursor:isRenaming?'text':(isDraggingThis?'grabbing':'grab'),
             color:isActive?'#fff':'#a6b2c2',fontSize:14,
-            background:dragCatId===cat.id?'rgba(22,136,255,0.08)':(isActive?'rgba(22,136,255,0.15)':'transparent'),
-            borderLeft:isActive?'3px solid #1688ff':'3px solid transparent'},
-          onClick:function(){if(isRenaming)return;onSelectProject(projId);onSelectCat(isActive?null:cat.id);}},
+            background:isDraggingThis?'rgba(22,136,255,0.08)':isDragOver?'rgba(22,136,255,0.12)':(isActive?'rgba(22,136,255,0.15)':'transparent'),
+            borderLeft:isActive?'3px solid #1688ff':'3px solid transparent',
+            opacity:isDraggingThis?0.5:1},
+          onMouseDown:handleCatMouseDown,
+          onClick:function(){if(isRenaming||_dragRef.current.active)return;onSelectProject(projId);onSelectCat(isActive?null:cat.id);}},
           h('span',{style:{flex:1,overflow:'hidden',display:'flex',alignItems:'center',minWidth:0}},
             hasChildren
               ?h('span',{onClick:function(e){e.stopPropagation();toggleExpand(cat.id);},style:{marginRight:2,opacity:0.7,flexShrink:0}},(isExp?'▾':'▸'))
