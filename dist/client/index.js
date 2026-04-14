@@ -313,7 +313,7 @@ function DocSidebar(props){
       var subCats=cats.filter(function(c){return c.parentId===cat.id;});
       var hasChildren=subCats.length>0;
       var isActive=String(activeCatId)===String(cat.id);
-      var isExp=expanded[cat.id];
+      var isExp=expanded[cat.id]!==false; // 預設展開，false 才收起
       var isRenaming=renamingCatId===cat.id;
       return h('div',{key:cat.id,
         draggable:!isRenaming,
@@ -431,13 +431,26 @@ function DocSidebar(props){
         onClick:function(){onSelectProject(null);onSelectCat(null);}},
         h('span',null,'📋 全部文件')
       ),
-      // 群組標題 + 新增群組按鈕（admin only）
+      // 群組標題 + 全部縮起 + 新增群組按鈕（admin only）
       h('div',{style:{padding:'0 16px 6px',display:'flex',alignItems:'center',justifyContent:'space-between'}},
         h('span',{style:{fontSize:13,fontWeight:700,color:'#8c99ad',letterSpacing:'0.5px'}},'群組'),
-        isAdmin&&h('span',{
-          title:'新增群組',
-          onClick:function(){setShowCreateGroup(true);setNewGroupName('');},
-          style:{color:'#6b8299',fontSize:16,cursor:'pointer',lineHeight:1,padding:'0 2px'}},'+')
+        h('span',{style:{display:'flex',alignItems:'center',gap:6}},
+          h('span',{
+            title:'全部資料夾縮起',
+            onClick:function(){
+              // 把所有 cat 的 expanded 設成 false
+              var collapsed={};
+              cats.forEach(function(c){collapsed[c.id]=false;});
+              setExpanded(collapsed);
+            },
+            style:{color:'#6b8299',fontSize:11,cursor:'pointer',padding:'1px 4px',lineHeight:1,
+              border:'1px solid #33475c',borderRadius:3,userSelect:'none',letterSpacing:'0.3px'}
+          },'━━'),
+          isAdmin&&h('span',{
+            title:'新增群組',
+            onClick:function(){setShowCreateGroup(true);setNewGroupName('');},
+            style:{color:'#6b8299',fontSize:16,cursor:'pointer',lineHeight:1,padding:'0 2px'}},'+')
+        )
       ),
       // 群組列表
       groups.map(function(grp){

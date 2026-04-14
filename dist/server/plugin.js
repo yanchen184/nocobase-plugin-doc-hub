@@ -382,13 +382,18 @@ class PluginDocHubServer extends import_server.Plugin {
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('docDocuments');
       const doc = await repo.findOne({ filterByTk });
-      if (!doc || !doc.githubRepo || !doc.githubFilePath) {
+      if (!doc || !doc.githubRepo) {
         ctx.throw(400, '此文件未綁定 GitHub 路徑');
       }
       const branch = doc.githubBranch || 'master';
+      // 若未設定檔案路徑，有分支時預設 README.md
+      const filePath = doc.githubFilePath || (doc.githubBranch ? 'README.md' : null);
+      if (!filePath) {
+        ctx.throw(400, '此文件未綁定 GitHub 路徑');
+      }
       let ghFile;
       try {
-        ghFile = await githubGetFile(doc.githubRepo, doc.githubFilePath, branch);
+        ghFile = await githubGetFile(doc.githubRepo, filePath, branch);
       } catch (e) {
         this.logger.error('[DocHub] pullFromGit fetch error: ' + e.message);
         ctx.throw(502, 'Git 拉取失敗，請稍後再試');
