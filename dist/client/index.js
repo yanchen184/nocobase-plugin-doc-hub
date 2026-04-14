@@ -1130,8 +1130,15 @@ function EditPage(){
     }
   }
 
+  function validateForm(){
+    if(!form.title||!form.title.trim()){message.warning('請先填寫文件標題');return false;}
+    if(!form.categoryId){message.warning('請選擇所屬資料夾');return false;}
+    if(!form.typeId){message.warning('請選擇文件類型');return false;}
+    return true;
+  }
+
   function handleSave(){
-    if(!form.title||!form.title.trim()){message.warning('請先填寫文件標題');return;}
+    if(!validateForm())return;
     if(isNew){doSave('');return;}
     // 非新文件，彈 Modal 讓使用者填 changeSummary
     setChangeSummary('');
@@ -1139,7 +1146,7 @@ function EditPage(){
   }
 
   function handlePublish(){
-    if(!form.title||!form.title.trim()){message.warning('請先填寫文件標題');return;}
+    if(!validateForm())return;
     if(isNew){doSave('','published');return;}
     setChangeSummary('');
     setShowSaveModal('published');
@@ -1203,13 +1210,13 @@ function EditPage(){
       h('div',{style:{display:'flex',alignItems:'center',gap:8}},
         h('span',{style:{fontSize:12,fontWeight:600,color:'#667380'}},'所屬資料夾'),
         h(Select,{value:form.categoryId,onChange:function(v){setField('categoryId',v);},
-          placeholder:form.projectId?'選擇資料夾（可選）':'請先選專案',
-          style:{width:200},size:'small',allowClear:true,disabled:!form.projectId,
+          placeholder:form.projectId?'選擇資料夾（必填）':'請先選專案',
+          style:{width:200,border:!form.categoryId?'1px solid #ff7875':'',borderRadius:6},size:'small',allowClear:true,disabled:!form.projectId,
           options:projCats.map(function(c){return{label:c.name,value:c.id};})})
       ),
       h('div',{style:{display:'flex',alignItems:'center',gap:8}},
         h('span',{style:{fontSize:12,fontWeight:600,color:'#667380'}},'文件類型'),
-        h(Select,{value:form.typeId,onChange:function(v){setField('typeId',v);},placeholder:'選擇類型',style:{width:140},size:'small',allowClear:true,
+        h(Select,{value:form.typeId,onChange:function(v){setField('typeId',v);},placeholder:'選擇類型（必填）',style:{width:140,border:!form.typeId?'1px solid #ff7875':'',borderRadius:6},size:'small',allowClear:true,
           options:docTypes.map(function(t){return{label:t.name,value:t.id};})})
       ),
       h('div',{style:{display:'flex',alignItems:'center',gap:8}},
