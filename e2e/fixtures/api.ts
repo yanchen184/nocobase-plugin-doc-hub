@@ -25,9 +25,28 @@ export class ApiHelper {
     await this.ctx.dispose()
   }
 
+  // ── Projects ──────────────────────────────────────────────────────────────
+
+  async createProject(data: { name: string; description?: string; githubRepo?: string }): Promise<any> {
+    const res = await this.ctx.post('/api/docProjects', { data })
+    if (!res.ok()) throw new Error(`createProject failed: ${await res.text()}`)
+    const body = await res.json()
+    return body.data
+  }
+
+  async deleteProject(id: number): Promise<void> {
+    await this.ctx.delete(`/api/docProjects/${id}`)
+  }
+
+  async listProjects(): Promise<any[]> {
+    const res = await this.ctx.get('/api/docProjects?pageSize=100')
+    const body = await res.json()
+    return body.data?.data || body.data || []
+  }
+
   // ── Document Categories ────────────────────────────────────────────────────
 
-  async createCategory(data: { name: string; description?: string }): Promise<any> {
+  async createCategory(data: { name: string; description?: string; projectId?: number }): Promise<any> {
     const res = await this.ctx.post('/api/docCategories', { data })
     if (!res.ok()) throw new Error(`createCategory failed: ${await res.text()}`)
     const body = await res.json()

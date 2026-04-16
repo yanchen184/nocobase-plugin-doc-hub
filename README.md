@@ -1,6 +1,23 @@
 # @nocobase/plugin-doc-hub
 
-NocoBase 文件庫管理插件，支援 Git 同步、版本歷史、專案分類與權限隔離。
+**DocHub** — NocoBase 企業文件管理插件。  
+支援 Markdown 撰寫、表單範本、版本歷史、文件鎖定、稽核日誌、Git 雙向同步（GitHub / GitLab）。
+
+---
+
+## 功能一覽
+
+| 功能 | 說明 |
+|------|------|
+| Markdown 編輯器 | 分割預覽、自動儲存（30s）、Cmd+S 手動儲存 |
+| 表單範本系統 | 欄位拖曳建構器、JSON 視圖、多類型欄位（文字/日期/用戶）|
+| 版本歷史 | 每次儲存自動快照、逐行 Diff 比較 |
+| 文件鎖定 | Admin 鎖定後任何人無法刪除，非 Admin 無法編輯 |
+| 稽核日誌 | 建立 / 更新 / 刪除 / 鎖定 / Git 同步失敗 全記錄 |
+| 專案層級權限 | Viewer / Editor / Subscriber 三角色，每個專案獨立設定 |
+| **Git 雙向同步** | GitHub / GitLab Push + Pull，Webhook 自動觸發 |
+| 全文搜尋 | PostgreSQL GIN 索引，支援中文模糊搜尋 |
+| 拖曳排序 | 文件列表、資料夾皆可拖曳調整順序 |
 
 ---
 
@@ -17,82 +34,55 @@ NocoBase 文件庫管理插件，支援 Git 同步、版本歷史、專案分類
 NocoBase/
 ├── docker-compose.yml
 ├── .env                  ← 機敏設定（不進 git）
-├── patch-nginx-cache.sh  ← nginx cache patch 腳本
+├── patch-nginx-cache.sh  ← nginx cache 長期快取修正腳本
 └── storage/
-    ├── db/postgres/      ← 資料庫資料（不進 git）
-    ├── uploads/          ← 上傳檔案
     └── plugins/
         └── @nocobase/
             └── plugin-doc-hub/   ← 本插件（獨立 git repo）
 ```
 
----
-
-## 首次部署
-
-### 1. 建立工作目錄
+### 首次部署
 
 ```bash
+# 1. 建立工作目錄
 mkdir /opt/nocobase && cd /opt/nocobase
-```
 
-### 2. 複製設定檔
-
-把 `docker-compose.yml` 和 `patch-nginx-cache.sh` 放到此目錄。
-
-### 3. Clone 插件
-
-```bash
+# 2. Clone 插件
 mkdir -p storage/plugins/@nocobase
 git clone https://github.com/yanchen184/nocobase-plugin-doc-hub \
   storage/plugins/@nocobase/plugin-doc-hub
-```
 
-### 4. 建立 .env
+# 3. 建立 .env（見下方說明）
+cp storage/plugins/@nocobase/plugin-doc-hub/.env.example .env
 
-```bash
-cp .env.example .env
-```
-
-編輯 `.env`，填入必要的值（見下方說明）。
-
-### 5. 啟動
-
-```bash
+# 4. 啟動
 docker-compose up -d
-```
 
-第一次啟動較慢（需解壓 LibreOffice），約需 3-5 分鐘。
-
-### 6. Patch nginx cache（首次 + 每次 force-recreate 後）
-
-等容器完全啟動後執行：
-
-```bash
+# 5. Patch nginx cache（首次 + 每次 force-recreate 後執行一次）
 chmod +x patch-nginx-cache.sh
 ./patch-nginx-cache.sh
 ```
 
-確認成功：
+### 日常更新插件
 
 ```bash
-curl -sI "http://localhost:13000/static/plugins/@nocobase/plugin-doc-hub/dist/client/index.js" | grep Cache-Control
-# 應顯示：Cache-Control: no-store, no-cache, must-revalidate
+cd storage/plugins/@nocobase/plugin-doc-hub
+git pull
+cd ../../..
+docker-compose restart app
 ```
 
 ---
 
 ## 環境變數說明（.env）
 
-| 變數 | 必填 | 說明 | 範例 |
-|------|------|------|------|
-| `APP_KEY` | ✅ | JWT 簽名金鑰，務必改成隨機字串 | `openssl rand -hex 32` |
-| `DB_PASSWORD` | ✅ | PostgreSQL 密碼 | `your-strong-password` |
-| `DOCHUB_GITLAB_HOST` | 使用 GitLab 才需要 | GitLab 主機 IP/domain | `10.1.2.191` |
-| `DOCHUB_GITLAB_TOKEN` | 使用 GitLab 才需要 | GitLab Personal Access Token（需 `read_repository` + `write_repository` 權限） | `glpat-xxxx` |
-| `DOCHUB_GITHUB_TOKEN` | 使用 GitHub 才需要 | GitHub Personal Access Token（需 `repo` 權限） | `ghp_xxxx` |
-
-### .env 範本
+| 變數 | 必填 | 說明 |
+|------|------|------|
+| `APP_KEY` | ✅ | JWT 簽名金鑰，建議 `openssl rand -hex 32` |
+| `DB_PASSWORD` | ✅ | PostgreSQL 密碼 |
+| `DOCHUB_GITLAB_HOST` | Git 同步時 | GitLab 主機（IP 或 domain） |
+| `DOCHUB_GITLAB_TOKEN` | Git 同步時 | GitLab Personal Access Token |
+| `DOCHUB_GITHUB_TOKEN` | Git 同步時 | GitHub Personal Access Token |
 
 ```env
 APP_KEY=your-random-secret-key-change-me
@@ -106,58 +96,79 @@ DOCHUB_GITLAB_TOKEN=glpat-your-token-here
 DOCHUB_GITHUB_TOKEN=
 ```
 
-> **注意**：`.env` 含機敏資訊，不要 commit 進 git。
-
 ---
 
-## 日常維運
+## Git 雙向同步設定
 
-### 更新插件
+DocHub 支援與 GitLab / GitHub 的雙向同步：
+
+- **DocHub → Git**：發布文件後手動推送，或從列表點 🔄
+- **Git → DocHub**：手動拉取，或透過 Webhook 在 `git push` 時自動觸發
+
+### Step 1：產生 GitLab Personal Access Token
+
+1. 登入 GitLab（`https://10.1.2.191`）
+2. 右上角頭像 → **Edit profile** → **Access Tokens**
+3. 建立新 Token，勾選以下 Scopes：
+   - ✅ `read_repository` — 讀取檔案（Git → DocHub 拉取）
+   - ✅ `write_repository` — 寫入檔案（DocHub → Git 推送）
+4. 複製 Token（只顯示一次！）
+
+### Step 2：填入 .env
+
+```env
+DOCHUB_GITLAB_HOST=10.1.2.191
+DOCHUB_GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+```
+
+重啟服務讓設定生效：
 
 ```bash
-cd storage/plugins/@nocobase/plugin-doc-hub
-git pull
-cd ../../..
 docker-compose restart app
-# 使用者不需要任何操作，瀏覽器自動載入新版
 ```
 
-### 重啟服務
+### Step 3：在文件上設定 Git 連結
 
-```bash
-docker-compose restart app   # 只重啟 app（保留資料）
-```
+進入任一文件的**編輯頁**，在頂部 Git 同步列（admin 才可見）填入：
 
-### 查看 log
+| 欄位 | 範例 |
+|------|------|
+| Repo | `wezoomtek/wez-spring-boot-starters` |
+| 檔案路徑 | `docs/quick-start.md` |
+| 分支 | `main` 或 `master` |
 
-```bash
-docker-compose logs app -f --tail=50
-```
+填好後點「**從 Git 拉取最新**」測試連線。
 
-### 備份資料庫
+### Step 4：設定 GitLab Webhook（自動同步）
 
-```bash
-docker exec nocobase-postgres-1 pg_dump -U nocobase nocobase > backup-$(date +%Y%m%d).sql
-```
+讓每次 `git push` 自動把最新內容同步到 DocHub：
 
----
+1. 進入 GitLab 專案 → **Settings** → **Webhooks**
+2. URL 填入：
+   ```
+   http://your-server-ip:13000/api/docDocuments:webhookReceive
+   ```
+3. **Trigger** 勾選 `Push events`
+4. 若使用自簽憑證，取消勾選 `Enable SSL verification`
+5. 點 **Add webhook**
+6. 點 **Test** → `Push events` 確認回傳 `200 OK`
 
-## 注意事項
+> 📌 **Demo Repo**：`https://10.1.2.191/wezoomtek/wez-spring-boot-starters`  
+> 已包含 `docs/` 目錄和多個 `.md` 檔案，可直接用於測試 Git 雙向同步。
 
-- `docker-compose down -v` 會刪除所有資料，**禁止**在正式環境執行
-- `docker-compose restart app` 不重建容器，資料安全
-- `docker-compose up -d --force-recreate` 重建容器後需重跑 `patch-nginx-cache.sh`
-- NocoBase 的表單、欄位、權限設定全部存在 DB，換機器部署需備份還原 DB
+### 推送文件到 Git（DocHub → Git）
 
----
+1. 文件必須先**發布**（草稿不能推送）
+2. 在列表頁找到該文件，點 ⋯ → **同步 Git**
+3. 確認後，文件內容將推送到 GitLab 對應路徑並建立 commit
 
-## GitLab Webhook 設定（自動同步 Git → DocHub）
+### 同步狀態說明
 
-1. 進入 GitLab 專案 → Settings → Webhooks
-2. URL：`http://your-server:13000/api/docDocuments:webhookReceive`
-3. Trigger：勾選 **Push events**
-4. 不需要 Secret Token（內部網路環境）
-5. 點 Add webhook
+| 狀態 | 說明 |
+|------|------|
+| 空白 | 未設定 Git 連結 |
+| `Synced ✓` | 最後一次同步成功 |
+| `Failed ✗` | 同步失敗（Token 過期 / repo 路徑錯誤）→ 站內信通知 Admin |
 
 ---
 
@@ -165,6 +176,23 @@ docker exec nocobase-postgres-1 pg_dump -U nocobase nocobase > backup-$(date +%Y
 
 | 帳號 | 密碼 | 角色 |
 |------|------|------|
-| `nocobase` | 見 .env APP_KEY 設定後登入 | Admin |
+| `admin@nocobase.com` | `admin123` | Admin（管理員）|
+| `member@test.com` | `member123` | 一般用戶（受權限限制）|
 
-首次登入後請至「使用者管理」建立其他帳號並設定角色。
+登入後請至「使用者管理」建立實際帳號。
+
+---
+
+## 常見問題
+
+**Q：更新插件後瀏覽器還是舊版？**  
+A：執行 `./patch-nginx-cache.sh` 確認 no-cache 設定，再強制重整（Cmd+Shift+R）。
+
+**Q：Git 同步失敗顯示 `401 Unauthorized`？**  
+A：Token 已過期或 Scope 不足，重新到 GitLab 產生新 Token 並更新 `.env`。
+
+**Q：GitLab Webhook Test 顯示 `Connection refused`？**  
+A：確認 NocoBase 服務的 port 13000 對 GitLab 所在網段可連通，或調整防火牆規則。
+
+**Q：`docker-compose down -v` 後資料不見了？**  
+A：`-v` 會刪除所有 volumes 包含資料庫！正式環境只能用 `docker-compose restart app`。

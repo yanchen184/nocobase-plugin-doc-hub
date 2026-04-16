@@ -499,57 +499,95 @@ TEMPLATE_FORM_V1
 
 每篇文件可以個別綁定一個 Git 檔案路徑，支援 **GitHub** 和 **GitLab**（含公司內網自簽憑證）。
 
+> **Demo Repo**：`https://10.1.2.191/wezoomtek/wez-spring-boot-starters`  
+> 已包含 `docs/` 目錄和多份 `.md` 檔案，可直接用來體驗 Git 雙向同步。
+
+### 前置設定（管理員操作）
+
+在使用 Git 同步前，管理員需先在伺服器設定 Token：
+
+#### 產生 GitLab Personal Access Token
+
+1. 登入 GitLab（`https://10.1.2.191`）
+2. 右上角頭像 → **Edit profile** → **Access Tokens**
+3. 建立新 Token，Scopes 勾選：
+   - ✅ `read_repository` — 允許讀取（拉取）
+   - ✅ `write_repository` — 允許寫入（推送）
+4. 複製 Token（只顯示一次）
+
+#### 填入伺服器 .env
+
+```env
+DOCHUB_GITLAB_HOST=10.1.2.191
+DOCHUB_GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+```
+
+重啟服務：`docker-compose restart app`
+
+---
+
 ### 支援的 Git 平台
 
 | 平台 | Repo 格式 | 範例 |
 |------|---------|------|
 | GitHub | `owner/repo` | `yanchen184/my-project` |
 | GitLab（IP） | `10.1.2.191/namespace/project` | `10.1.2.191/wezoomtek/backend` |
-| GitLab（含 https）| `https://10.1.2.191/namespace/project` | 兩種格式皆支援 |
+| GitLab（含 https）| `https://...` | 兩種格式皆支援 |
 
-### 綁定設定
+### 在文件上綁定 Git
 
-在 EditPage 頂部的 Git 同步區填入：
+在 EditPage 頂部（Admin 才可見）的 Git 同步列填入：
 
 | 欄位 | 說明 | 範例 |
 |------|------|------|
-| **Repo** | Git repo 路徑 | `10.1.2.191/wezoomtek/backend` |
-| **檔案路徑** | repo 內的相對路徑 | `README.md` 或 `docs/api.md` |
-| **分支** | 要同步的分支 | `master` 或 `main` |
+| **Repo** | Git repo 路徑 | `wezoomtek/wez-spring-boot-starters` |
+| **檔案路徑** | repo 內的相對路徑 | `docs/quick-start.md` |
+| **分支** | 要同步的分支 | `main` 或 `master` |
 
-### 從 Git 拉取（Git → DocHub）
+### Git → DocHub：從 Git 拉取最新內容
 
-- **手動**：在 EditPage 點「**從 Git 拉取最新**」
-- **自動（Webhook）**：每次 Git push 自動觸發同步
+**方式 A：手動拉取**
+1. 進入文件的 EditPage
+2. 在頂部 Git 同步列點「**從 Git 拉取最新**」
+3. 成功後 Editor 內容會更新為 Git 上的最新版
 
-**設定 GitLab Webhook：**
+**方式 B：Webhook 自動觸發（推薦）**
 
-1. 進入 GitLab repo → Settings → Webhooks
-2. URL 填入：`https://{你的公開URL}/api/docDocuments:webhookReceive`
-3. Trigger 勾選 **Push events**
-4. 取消勾選 SSL verification（若使用 ngrok 或自簽憑證）
-5. 點 Add webhook
+設定後，每次 `git push` 會自動把最新 `.md` 同步到 DocHub：
 
-### 推送到 Git（DocHub → Git）
+1. 進入 GitLab 專案 → **Settings** → **Webhooks**
+2. URL 填入：
+   ```
+   http://your-server-ip:13000/api/docDocuments:webhookReceive
+   ```
+3. **Trigger** 勾選 `Push events`
+4. 若使用自簽憑證，取消勾選 `Enable SSL verification`
+5. 點 **Add webhook** → **Test** → 確認回傳 `200 OK`
 
-1. 文件必須先**發布**（Draft 無法推送）
-2. 在列表頁點擊 🔄 按鈕，或在 EditPage 點「**同步 Git**」
-3. 確認後文件內容推送到 Git 對應路徑
+### DocHub → Git：推送到 Git
+
+1. 文件狀態必須為**已發布**（草稿無法推送）
+2. 在文件列表找到該文件，點 **⋯** → **同步 Git**
+3. 系統將 DocHub 的 Markdown 內容推送到 GitLab 對應路徑，並自動建立 commit
+
+> 搭配 **SourceTree** 可直觀地看到 DocHub 推送的 commit 記錄：  
+> commit message 格式為 `docs: update {文件標題} via DocHub`
 
 ### 同步失敗通知
 
-當 Git 同步失敗時（Token 過期、repo 路徑錯誤等），系統會：
-1. 將文件的 `gitSyncStatus` 設為 `failed`
-2. 在列表頁該文件顯示同步失敗標示
-3. 發送站內信通知給管理員
+當同步失敗（Token 過期、repo 路徑錯誤、網路不通等），系統會：
+1. 將文件的同步狀態設為 `Failed`
+2. 在列表頁顯示紅色失敗標示
+3. 發送**站內信**通知所有管理員
 
-### 同步狀態
+### 同步狀態說明
 
-| 狀態 | 說明 |
+| 狀態 | 含義 |
 |------|------|
-| `Pending` | 尚未同步過 |
-| `Synced ✓` | 最後一次同步成功 |
-| `Failed ✗` | 同步失敗，請檢查 Token 或 repo 設定 |
+| 空白 | 未設定 Git 連結 |
+| `Synced ✓`（綠） | 最後一次同步成功 |
+| `Failed ✗`（紅） | 同步失敗，請確認 Token 或 repo 設定 |
+| `Pending`（灰） | 設定了但尚未同步過 |
 
 ---
 
