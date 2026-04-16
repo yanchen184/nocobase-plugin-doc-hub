@@ -3347,15 +3347,15 @@ function ViewPage(){
       '@media print{.dochub-no-print{display:none!important}.dochub-preview{font-size:13px}}'
     ].join('\n');
     document.head.appendChild(st);
-    // 閱讀進度條
-    function onScroll(){
-      var el=document.documentElement;
+    // 閱讀進度條（NocoBase 頁面滾動容器可能是內部 div，用 capture:true 攔截所有滾動）
+    function onScroll(e){
+      var el=e&&e.target&&e.target.scrollHeight>e.target.clientHeight?e.target:document.documentElement;
       var scrolled=el.scrollTop||document.body.scrollTop;
       var total=(el.scrollHeight||1)-(el.clientHeight||1);
       setReadProgress(total>0?Math.min(100,Math.round(scrolled/total*100)):0);
     }
-    window.addEventListener('scroll',onScroll,{passive:true});
-    return function(){window.removeEventListener('scroll',onScroll);};
+    window.addEventListener('scroll',onScroll,{passive:true,capture:true});
+    return function(){window.removeEventListener('scroll',onScroll,{capture:true});};
   },[]);
 
   // 最近查看記錄
