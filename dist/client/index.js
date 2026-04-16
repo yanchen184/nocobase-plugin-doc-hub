@@ -248,6 +248,14 @@ function DocSidebar(props){
   var _cpsv=useState(false);var permSaving=_cpsv[0];var setPermSaving=_cpsv[1];
   var _allusers=useState([]);var allUsers=_allusers[0];var setAllUsers=_allusers[1];
 
+  // 資料夾權限 Modal state
+  var _permCat=useState(null);var permCat=_permCat[0];var setPermCat=_permCat[1];
+  var _permCatOverride=useState(false);var permCatOverride=_permCatOverride[0];var setPermCatOverride=_permCatOverride[1];
+  var _permCatViewerIds=useState([]);var permCatViewerIds=_permCatViewerIds[0];var setPermCatViewerIds=_permCatViewerIds[1];
+  var _permCatEditorIds=useState([]);var permCatEditorIds=_permCatEditorIds[0];var setPermCatEditorIds=_permCatEditorIds[1];
+  var _permCatLoading=useState(false);var permCatLoading=_permCatLoading[0];var setPermCatLoading=_permCatLoading[1];
+  var _permCatSaving=useState(false);var permCatSaving=_permCatSaving[0];var setPermCatSaving=_permCatSaving[1];
+
   // Drag Category (同層排序)
   var _dcat=useState(null);var dragCatId=_dcat[0];var setDragCatId=_dcat[1];
   var _dov=useState(null);var dragOverCatId=_dov[0];var setDragOverCatId=_dov[1];
@@ -376,6 +384,34 @@ function DocSidebar(props){
       .catch(function(err){message.error('儲存失敗: '+(err&&err.message||'error'));setPermSaving(false);});
   }
 
+  function openCatPermModal(cat){
+    setPermCat(cat);
+    setPermCatOverride(false);setPermCatViewerIds([]);setPermCatEditorIds([]);setPermCatLoading(true);
+    if(allUsers.length===0&&client){
+      client.request({url:'users:list',method:'get',params:{pageSize:200}})
+        .then(function(res){setAllUsers((res.data&&res.data.data)||[]);});
+    }
+    if(!client)return;
+    client.request({url:'docCategories:getPermissions',method:'get',params:{filterByTk:cat.id}})
+      .then(function(res){
+        var d=res.data&&res.data.data;
+        setPermCatOverride(!!(d&&d.overridePermission));
+        setPermCatViewerIds((d&&d.viewerIds)||[]);
+        setPermCatEditorIds((d&&d.editorIds)||[]);
+        setPermCatLoading(false);
+      })
+      .catch(function(){setPermCatLoading(false);});
+  }
+
+  function doSaveCatPermissions(){
+    if(!permCat||!client)return;
+    setPermCatSaving(true);
+    client.request({url:'docCategories:setPermissions',method:'post',params:{filterByTk:permCat.id},
+      data:{overridePermission:permCatOverride,viewerIds:permCatViewerIds,editorIds:permCatEditorIds}})
+      .then(function(){message.success('資料夾權限已更新');setPermCat(null);setPermCatSaving(false);loadSidebar();})
+      .catch(function(err){message.error('儲存失敗: '+(err&&err.message||'error'));setPermCatSaving(false);});
+  }
+
   var sidebarStyle={
     width:collapsed?56:270,flexShrink:0,background:'#1a2a3a',minHeight:'100vh',
     display:'flex',flexDirection:'column',position:'sticky',top:0,height:'100vh',overflow:'hidden',
@@ -486,6 +522,12 @@ function DocSidebar(props){
           h('span',{style:{display:'flex',alignItems:'center',gap:3,flexShrink:0,opacity:0.7}},
             h('span',{title:'新增子資料夾',onClick:function(e){e.stopPropagation();setCreateCatProjId(projId);setCreateCatParentId(cat.id);setNewCatName('');},
               style:{color:'#8ba4be',fontSize:16,cursor:'pointer',padding:'0 3px',lineHeight:1,fontWeight:300}},'+'),
+            isAdmin&&h('span',{
+              title:cat.overridePermission?'資料夾權限（自訂中）':'資料夾權限（繼承專案）',
+              onClick:function(e){e.stopPropagation();openCatPermModal(cat);},
+              style:{fontSize:12,cursor:'pointer',padding:'0 2px',lineHeight:1,
+                color:cat.overridePermission?'#faad14':'#6b8299',opacity:cat.overridePermission?1:0.7}
+            },cat.overridePermission?'🔐':'🔓'),
             isAdmin&&h('span',{title:'刪除資料夾',onClick:function(e){e.stopPropagation();setDeleteCat(cat);},
               style:{color:'#c26666',fontSize:13,cursor:'pointer',padding:'0 3px',lineHeight:1}
             },'✕')
@@ -939,6 +981,69 @@ function DocSidebar(props){
                   return (opt.label||'').toLowerCase().includes(input.toLowerCase());
                 }
               })
+            )
+          )
+    ),
+
+    // ── 資料夾權限 Modal ──────────────────────────────────────────────────────
+    h(Modal,{
+      title:h('span',null,'🔐 資料夾權限設定 — ',h('strong',null,permCat&&permCat.name)),
+      open:!!permCat,
+      onCancel:function(){setPermCat(null);},
+      width:540,
+      footer:h(Space,null,
+        h(Button,{onClick:function(){setPermCat(null);}},'取消'),
+        h(Button,{type:'primary',loading:permCatSaving,onClick:doSaveCatPermissions},'儲存')
+      )},
+      permCatLoading
+        ? h('div',{style:{textAlign:'center',padding:32}},h(Spin,null))
+        : h('div',null,
+            // 繼承 / 自訂 切換
+            h('div',{style:{marginBottom:20,padding:'12px 16px',background:'#f8fafc',borderRadius:8,border:'1px solid #e8ecf0'}},
+              h('div',{style:{fontWeight:600,marginBottom:12,color:'#333'}},'權限模式'),
+              h('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+                h('label',{style:{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}},
+                  h('input',{type:'radio',checked:!permCatOverride,onChange:function(){setPermCatOverride(false);},style:{marginTop:2}}),
+                  h('div',null,
+                    h('div',{style:{fontWeight:500,color:'#333'}},'繼承專案設定（預設）'),
+                    h('div',{style:{fontSize:12,color:'#888',marginTop:2}},'套用此資料夾所屬專案的 Viewer / Editor 設定')
+                  )
+                ),
+                h('label',{style:{display:'flex',alignItems:'flex-start',gap:10,cursor:'pointer'}},
+                  h('input',{type:'radio',checked:permCatOverride,onChange:function(){setPermCatOverride(true);},style:{marginTop:2}}),
+                  h('div',null,
+                    h('div',{style:{fontWeight:500,color:'#faad14'}},'自訂此資料夾的權限'),
+                    h('div',{style:{fontSize:12,color:'#888',marginTop:2}},'獨立設定，不受專案權限影響')
+                  )
+                )
+              )
+            ),
+            // 自訂設定區（只有選自訂才啟用）
+            h('div',{style:{opacity:permCatOverride?1:0.4,pointerEvents:permCatOverride?'auto':'none',transition:'opacity 0.2s'}},
+              h('div',{style:{marginBottom:16}},
+                h('div',{style:{fontWeight:600,marginBottom:8,color:'#333'}},'📖 可查看（Viewer）'),
+                h('div',{style:{fontSize:12,color:'#888',marginBottom:8}},'可查看此資料夾下的所有文件'),
+                h(Select,{
+                  mode:'multiple',style:{width:'100%'},
+                  placeholder:'選擇可查看的用戶...',
+                  value:permCatViewerIds,
+                  onChange:function(v){setPermCatViewerIds(v);},
+                  optionFilterProp:'label',
+                  options:allUsers.map(function(u){return{value:u.id,label:(u.nickname||u.username||u.email||('User#'+u.id))};})
+                })
+              ),
+              h('div',null,
+                h('div',{style:{fontWeight:600,marginBottom:8,color:'#333'}},'✏️ 可編輯（Editor）'),
+                h('div',{style:{fontSize:12,color:'#888',marginBottom:8}},'可查看及編輯此資料夾下的所有文件'),
+                h(Select,{
+                  mode:'multiple',style:{width:'100%'},
+                  placeholder:'選擇可編輯的用戶...',
+                  value:permCatEditorIds,
+                  onChange:function(v){setPermCatEditorIds(v);},
+                  optionFilterProp:'label',
+                  options:allUsers.map(function(u){return{value:u.id,label:(u.nickname||u.username||u.email||('User#'+u.id))};})
+                })
+              )
             )
           )
     )

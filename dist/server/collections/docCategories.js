@@ -24,5 +24,14 @@ module.exports = (0, import_database.defineCollection)({
       foreignKey: 'categoryId',
       otherKey: 'userId',
     },
+    {
+      type: 'belongsToMany',
+      name: 'subscribers',
+      target: 'users',
+      through: 'docCategorySubscribers',
+      foreignKey: 'categoryId',
+      otherKey: 'userId',
+    },
+    { type: 'boolean', name: 'overridePermission', defaultValue: false },
   ],
 });

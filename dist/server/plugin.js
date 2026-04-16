@@ -283,12 +283,18 @@ class PluginDocHubServer extends import_server.Plugin {
          UNION SELECT "documentId" FROM "docDocumentSubscribers" WHERE "userId" = :uid`,
         { replacements: { uid: userId }, type: db.sequelize.QueryTypes.SELECT }
       );
-      // 3. 資料夾層級授權 — 有資料夾 viewer/editor 可見該資料夾下所有文件
+      // 3. 資料夾層級授權（overridePermission=true 的資料夾用自己的 viewer/editor）
       let catDocIds = [];
       try {
+        // 只取有 override 的資料夾中，user 有權限的
         const catRows = await db.sequelize.query(
-          `SELECT "categoryId" FROM "docCategoryViewers" WHERE "userId" = :uid
-           UNION SELECT "categoryId" FROM "docCategoryEditors" WHERE "userId" = :uid`,
+          `SELECT cv."categoryId" FROM "docCategoryViewers" cv
+           JOIN "docCategories" c ON c.id = cv."categoryId" AND c."overridePermission" = true
+           WHERE cv."userId" = :uid
+           UNION
+           SELECT ce."categoryId" FROM "docCategoryEditors" ce
+           JOIN "docCategories" c ON c.id = ce."categoryId" AND c."overridePermission" = true
+           WHERE ce."userId" = :uid`,
           { replacements: { uid: userId }, type: db.sequelize.QueryTypes.SELECT }
         );
         if (catRows.length > 0) {
@@ -301,7 +307,7 @@ class PluginDocHubServer extends import_server.Plugin {
         }
       } catch(e) { /* docCategoryViewers table may not exist yet */ }
 
-      // 4. 專案層授權 — 有專案 viewer/editor 可見該專案下所有文件
+      // 4. 專案層授權 — 有專案 viewer/editor 可見該專案下【未 override】資料夾的文件
       let projDocIds = [];
       try {
         const projRows = await db.sequelize.query(
@@ -311,10 +317,14 @@ class PluginDocHubServer extends import_server.Plugin {
         );
         if (projRows.length > 0) {
           const projIds = projRows.map(r => r.projectId);
-          const docs = await db.getRepository('docDocuments').find({
-            filter: { projectId: { $in: projIds } },
-            fields: ['id'],
-          });
+          // 只取 overridePermission=false 的資料夾下的文件（override=true 的由資料夾層自己管）
+          const docs = await db.sequelize.query(
+            `SELECT d.id FROM "docDocuments" d
+             LEFT JOIN "docCategories" c ON c.id = d."categoryId"
+             WHERE d."projectId" IN (:projIds)
+               AND (c."overridePermission" IS NULL OR c."overridePermission" = false)`,
+            { replacements: { projIds }, type: db.sequelize.QueryTypes.SELECT }
+          );
           projDocIds = docs.map(d => d.id);
         }
       } catch(e) { /* docProjectViewers table may not exist yet */ }
@@ -950,6 +960,54 @@ class PluginDocHubServer extends import_server.Plugin {
       }
       if (Array.isArray(subscriberIds)) {
         await ctx.db.getRepository('docProjects.subscribers', filterByTk).set(subscriberIds);
+      }
+      ctx.body = { ok: true };
+      await next();
+    });
+
+    // 資料夾權限：讀取（override 狀態 + 成員清單）
+    this.app.resourceManager.registerActionHandler('docCategories:getPermissions', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      const { filterByTk } = ctx.action.params;
+      const cat = await ctx.db.getRepository('docCategories').findOne({
+        filterByTk,
+        appends: ['viewers', 'editors'],
+      });
+      if (!cat) { ctx.throw(404, '資料夾不存在'); return; }
+      ctx.body = {
+        overridePermission: !!cat.overridePermission,
+        viewerIds: (cat.viewers || []).map(u => u.id),
+        editorIds: (cat.editors || []).map(u => u.id),
+        viewers: cat.viewers || [],
+        editors: cat.editors || [],
+      };
+      await next();
+    });
+
+    // 資料夾權限：設定（限 admin）
+    this.app.resourceManager.registerActionHandler('docCategories:setPermissions', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      if (!isAdmin(currentUser)) { ctx.throw(403, '只有管理員可以設定資料夾權限'); return; }
+      const { filterByTk } = ctx.action.params;
+      const body = ctx.request.body || {};
+      const { overridePermission, viewerIds, editorIds } = body;
+      const repo = ctx.db.getRepository('docCategories');
+      const cat = await repo.findOne({ filterByTk });
+      if (!cat) { ctx.throw(404, '資料夾不存在'); return; }
+      await repo.update({ filterByTk, values: { overridePermission: !!overridePermission } });
+      if (!!overridePermission) {
+        if (Array.isArray(viewerIds)) {
+          await ctx.db.getRepository('docCategories.viewers', filterByTk).set(viewerIds);
+        }
+        if (Array.isArray(editorIds)) {
+          await ctx.db.getRepository('docCategories.editors', filterByTk).set(editorIds);
+        }
+      } else {
+        // 切回繼承時清空自訂成員
+        await ctx.db.getRepository('docCategories.viewers', filterByTk).set([]);
+        await ctx.db.getRepository('docCategories.editors', filterByTk).set([]);
       }
       ctx.body = { ok: true };
       await next();
