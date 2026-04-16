@@ -72,6 +72,34 @@ export class ApiHelper {
     return body.data || []
   }
 
+  // ── Lock / Unlock ─────────────────────────────────────────────────────────
+
+  async lockDocument(id: number): Promise<any> {
+    const res = await this.ctx.post(`/api/docDocuments:lock?filterByTk=${id}`)
+    const body = await res.json()
+    // NocoBase wraps response in { data: { ok, locked } }
+    return body.data ?? body
+  }
+
+  async unlockDocument(id: number): Promise<any> {
+    const res = await this.ctx.post(`/api/docDocuments:unlock?filterByTk=${id}`)
+    const body = await res.json()
+    return body.data ?? body
+  }
+
+  // ── Audit Logs ────────────────────────────────────────────────────────────
+
+  async listAuditLogs(params: Record<string, string | number> = {}): Promise<any[]> {
+    const qs = new URLSearchParams({
+      pageSize: '50',
+      ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])),
+    })
+    const res = await this.ctx.get(`/api/docAuditLogs?${qs}`)
+    if (!res.ok()) return []
+    const body = await res.json()
+    return body.data?.data || body.data || []
+  }
+
   // ── Cleanup ────────────────────────────────────────────────────────────────
 
   /**

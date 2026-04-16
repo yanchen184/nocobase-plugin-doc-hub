@@ -6,5 +6,7 @@ module.exports = (0, import_database.defineCollection)({
     { type: 'text', name: 'description' },
     { type: 'string', name: 'color' },
     { type: 'integer', name: 'sort', defaultValue: 0 },
+    { type: 'text', name: 'template' },
+    { type: 'integer', name: 'templateId' },
   ],
 });

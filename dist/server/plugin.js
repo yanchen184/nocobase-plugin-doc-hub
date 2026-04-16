@@ -29,14 +29,126 @@ class PluginDocHubServer extends import_server.Plugin {
       this.logger && this.logger.warn('db sync warning: ' + (e && e.message));
     }
 
+    // ── Audit Log helper ────────────────────────────────────────────────────
+    const _logger = this.logger;
+    const _db = this.db;
+    async function writeAuditLog({ action, resourceType, resourceId, resourceTitle, user, detail }) {
+      try {
+        await _db.getRepository('docAuditLogs').create({
+          values: {
+            action,
+            resourceType: resourceType || 'docDocuments',
+            resourceId: resourceId || null,
+            resourceTitle: resourceTitle || '',
+            userId: user?.id || null,
+            userNickname: user?.nickname || user?.username || user?.email || '未知',
+            detail: detail || null,
+            createdAt: new Date(),
+          },
+        });
+      } catch(e) {
+        _logger && _logger.warn('[AuditLog] write failed: ' + e.message);
+      }
+    }
+
+    // ── Git 失敗站內信通知 helper ─────────────────────────────────────────────
+    async function notifyGitSyncFailed(db, docId, docTitle, errorMsg) {
+      try {
+        const docRepo = db.getRepository('docDocuments');
+        const doc = await docRepo.findOne({ filterByTk: docId, appends: ['subscribers'] });
+        if (!doc) return;
+        const recipientIds = new Set();
+        if (doc.createdById) recipientIds.add(doc.createdById);
+        (doc.subscribers || []).forEach(u => recipientIds.add(u.id));
+        if (recipientIds.size === 0) return;
+        const msgRepo = db.getRepository('notificationInAppMessages');
+        for (const uid of recipientIds) {
+          await msgRepo.create({
+            values: {
+              userId: uid,
+              channelName: 'doc-hub',
+              title: `Git 同步失敗：${docTitle || '文件'}`,
+              content: `文件《${docTitle || '（未知）'}》的 Git 同步發生錯誤：${errorMsg || '未知錯誤'}，請確認 Git 設定或聯繫管理員。`,
+              status: 'unread',
+              receiveTimestamp: Date.now(),
+            },
+          });
+        }
+      } catch(e) {
+        _logger && _logger.warn('[DocHub] notifyGitSyncFailed error: ' + e.message);
+      }
+    }
+
     this.app.resourceManager.registerActionHandler('docDocuments:syncToGit', import_syncToGit.syncToGit);
     this.app.resourceManager.registerActionHandler('docProjects:syncToGit', import_syncProjectToGit.syncProjectToGit);
+
+    // 側邊欄文件數量 — 只回傳 { count: N }
+    this.app.resourceManager.registerActionHandler('docDocuments:count', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.body = { count: 0 }; return; }
+      const { Op } = require('sequelize');
+      const repo = ctx.db.getRepository('docDocuments');
+      const projectId = ctx.action.params.projectId || null;
+      const where = {};
+      if (projectId) where.projectId = projectId;
+      if (!isAdmin(currentUser)) {
+        const visibleIds = await getVisibleDocIds(ctx.db, currentUser.id);
+        if (visibleIds.length === 0) { ctx.body = { count: 0 }; return; }
+        where.id = { [Op.in]: visibleIds };
+      }
+      const count = await repo.model.count({ where });
+      ctx.body = { count };
+    });
+
+    // 圖片上傳 — 存到 storage/uploads/doc-images/，回傳 { url }
+    this.app.resourceManager.registerActionHandler('docDocuments:uploadImage', async (ctx) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, 'Unauthorized'); return; }
+
+      const fs = require('fs');
+      const path = require('path');
+      const crypto = require('crypto');
+      const Busboy = require('busboy');
+
+      const contentType = ctx.request.headers['content-type'] || '';
+      if (!contentType.includes('multipart/form-data')) {
+        ctx.throw(400, 'Expected multipart/form-data'); return;
+      }
+
+      const { buffer, filename: origName } = await new Promise((resolve, reject) => {
+        const bb = Busboy({ headers: ctx.request.headers, limits: { fileSize: 20 * 1024 * 1024 } });
+        let result = null;
+        bb.on('file', (fieldname, stream, info) => {
+          const chunks = [];
+          stream.on('data', (d) => chunks.push(d));
+          stream.on('end', () => { result = { buffer: Buffer.concat(chunks), filename: info.filename }; });
+        });
+        bb.on('finish', () => resolve(result || {}));
+        bb.on('error', reject);
+        ctx.req.pipe(bb);
+      });
+
+      if (!buffer || !buffer.length) { ctx.throw(400, 'No file uploaded'); return; }
+
+      const ext = path.extname(origName || 'image.png').toLowerCase() || '.png';
+      const allowed = ['.jpg','.jpeg','.png','.gif','.webp'];
+      if (!allowed.includes(ext)) { ctx.throw(400, 'Unsupported file type'); return; }
+
+      const dir = path.join(process.cwd(), 'storage', 'uploads', 'doc-images');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+      const unique = crypto.randomBytes(8).toString('hex');
+      const filename = unique + ext;
+      fs.writeFileSync(path.join(dir, filename), buffer);
+
+      ctx.body = { url: '/storage/uploads/doc-images/' + filename };
+    });
 
     // 全文搜尋 action（title + content ILIKE）
     this.app.resourceManager.registerActionHandler('docDocuments:search', async (ctx, next) => {
       const currentUser = await getCurrentUser(ctx);
       const q = (ctx.action.params.q || '').trim();
-      const pageSize = parseInt(ctx.action.params.pageSize) || 20;
+      const pageSize = Math.min(parseInt(ctx.action.params.pageSize) || 20, 200);
       const page = parseInt(ctx.action.params.page) || 1;
       const categoryId = ctx.action.params.categoryId || null;
       const typeId = ctx.action.params.typeId || null;
@@ -129,21 +241,22 @@ class PluginDocHubServer extends import_server.Plugin {
       const typeMap = Object.fromEntries(types.map(t => [t.id, t]));
       const editorMap = Object.fromEntries(editors.map(e => [e.id, e]));
 
-      ctx.body = rows.map(r => {
+      const dataRows = rows.map(r => {
         const doc = { ...r };
         doc.category = catMap[r.categoryId] || null;
         doc.type = typeMap[r.typeId] || null;
         doc.lastEditor = editorMap[r.lastEditorId] || null;
         if (r._headline) {
-          // ts_headline 回傳的片段已含 <b>關鍵字</b>，轉成前端可用的純文字陣列
           doc._snippets = r._headline.split(' … ').filter(Boolean).map(s => ({ text: s.replace(/<\/?b>/g, '') }));
-          doc._headlineHtml = r._headline; // 保留 HTML 版本供前端高亮渲染
+          doc._headlineHtml = r._headline;
           delete doc._headline;
         }
         return doc;
       });
+      // NocoBase 框架會自動把 ctx.body 包成 { data: ctx.body }
+      // 所以這裡直接設 array，前端用 res.data.data 拿到 array
+      ctx.body = dataRows;
       ctx.meta = { count: total, page, pageSize, totalPage: Math.ceil(total / pageSize) };
-      await next();
     });
 
     // 權限過濾 helper：判斷當前 user 是否為 admin
@@ -155,24 +268,76 @@ class PluginDocHubServer extends import_server.Plugin {
     }
 
     // 取得當前 user 可見的文件 ID 集合（用於 list/search 過濾）
+    // 可見性來源：1) 自己創建的 2) 文件層級的 viewer/editor/subscriber 3) 資料夾層級的 viewer/editor
     async function getVisibleDocIds(db, userId) {
       const { Op } = require('sequelize');
-      // owner 或 viewer 或 editor 或 subscriber
+      // 1. 自己創建的文件
       const owned = await db.getRepository('docDocuments').find({
         filter: { createdById: userId },
         fields: ['id'],
       });
-      const viewerRows = await db.sequelize.query(
+      // 2. 文件層級授權
+      const docViewerRows = await db.sequelize.query(
         `SELECT "documentId" as id FROM "docDocumentViewers" WHERE "userId" = :uid
          UNION SELECT "documentId" FROM "docDocumentEditors" WHERE "userId" = :uid
          UNION SELECT "documentId" FROM "docDocumentSubscribers" WHERE "userId" = :uid`,
         { replacements: { uid: userId }, type: db.sequelize.QueryTypes.SELECT }
       );
+      // 3. 資料夾層級授權 — 有資料夾 viewer/editor 可見該資料夾下所有文件
+      let catDocIds = [];
+      try {
+        const catRows = await db.sequelize.query(
+          `SELECT "categoryId" FROM "docCategoryViewers" WHERE "userId" = :uid
+           UNION SELECT "categoryId" FROM "docCategoryEditors" WHERE "userId" = :uid`,
+          { replacements: { uid: userId }, type: db.sequelize.QueryTypes.SELECT }
+        );
+        if (catRows.length > 0) {
+          const catIds = catRows.map(r => r.categoryId);
+          const docs = await db.getRepository('docDocuments').find({
+            filter: { categoryId: { $in: catIds } },
+            fields: ['id'],
+          });
+          catDocIds = docs.map(d => d.id);
+        }
+      } catch(e) { /* docCategoryViewers table may not exist yet */ }
+
+      // 4. 專案層授權 — 有專案 viewer/editor 可見該專案下所有文件
+      let projDocIds = [];
+      try {
+        const projRows = await db.sequelize.query(
+          `SELECT "projectId" FROM "docProjectViewers" WHERE "userId" = :uid
+           UNION SELECT "projectId" FROM "docProjectEditors" WHERE "userId" = :uid`,
+          { replacements: { uid: userId }, type: db.sequelize.QueryTypes.SELECT }
+        );
+        if (projRows.length > 0) {
+          const projIds = projRows.map(r => r.projectId);
+          const docs = await db.getRepository('docDocuments').find({
+            filter: { projectId: { $in: projIds } },
+            fields: ['id'],
+          });
+          projDocIds = docs.map(d => d.id);
+        }
+      } catch(e) { /* docProjectViewers table may not exist yet */ }
+
       const ids = new Set([
         ...owned.map(d => d.id),
-        ...viewerRows.map(r => r.id),
+        ...docViewerRows.map(r => r.id),
+        ...catDocIds,
+        ...projDocIds,
       ]);
       return [...ids];
+    }
+
+    // 專案層權限 helper：取得 user 有 viewer/editor 的專案 ID
+    async function getVisibleProjectIds(db, userId) {
+      try {
+        const rows = await db.sequelize.query(
+          `SELECT "projectId" FROM "docProjectViewers" WHERE "userId" = :uid
+           UNION SELECT "projectId" FROM "docProjectEditors" WHERE "userId" = :uid`,
+          { replacements: { uid: userId }, type: db.sequelize.QueryTypes.SELECT }
+        );
+        return rows.map(r => r.projectId);
+      } catch(e) { return []; }
     }
 
     // 覆寫 docDocuments:list — 加權限過濾（owner/viewer/editor/subscriber 都可見）
@@ -184,7 +349,7 @@ class PluginDocHubServer extends import_server.Plugin {
       const filter = params.filter || {};
       const { Op } = require('sequelize');
       const repo = ctx.db.getRepository('docDocuments');
-      const pageSize = parseInt(params.pageSize) || 20;
+      const pageSize = Math.min(parseInt(params.pageSize) || 20, 200);
       const page = parseInt(params.page) || 1;
       const appends = params.appends || [];
       const sortParam = params.sort || ['-updatedAt'];
@@ -232,6 +397,7 @@ class PluginDocHubServer extends import_server.Plugin {
     // 覆寫 docDocuments:get — 加權限過濾
     this.app.resourceManager.registerActionHandler('docDocuments:get', async (ctx, next) => {
       const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('docDocuments');
       const paramAppends = ctx.action.params.appends || [];
@@ -240,7 +406,7 @@ class PluginDocHubServer extends import_server.Plugin {
       const doc = await repo.findOne({ filterByTk, appends });
       if (!doc) { ctx.throw(404, '文件不存在'); return; }
 
-      if (!isAdmin(currentUser) && currentUser) {
+      if (!isAdmin(currentUser)) {
         const uid = currentUser.id;
         const isOwner = doc.createdById === uid;
         if (!isOwner) {
@@ -251,7 +417,7 @@ class PluginDocHubServer extends import_server.Plugin {
       ctx.body = doc;
     });
 
-    // 覆寫 docDocuments:destroy — 只有文件創建者或 admin 可刪除
+    // 覆寫 docDocuments:destroy — 只有文件創建者或 admin 可刪除；鎖定中文件任何人不可刪
     this.app.resourceManager.registerActionHandler('docDocuments:destroy', async (ctx, next) => {
       const currentUser = await getCurrentUser(ctx);
       if (!currentUser) { ctx.throw(401, '請先登入'); return; }
@@ -259,10 +425,22 @@ class PluginDocHubServer extends import_server.Plugin {
       const repo = ctx.db.getRepository('docDocuments');
       const doc = await repo.findOne({ filterByTk });
       if (!doc) { ctx.throw(404, '文件不存在'); return; }
-      if (!isAdmin(currentUser) && doc.createdById !== currentUser.id) {
+      // 鎖定中：任何人（包含 admin）都不能刪除
+      if (doc.locked) {
+        ctx.throw(403, '此文件已鎖定，無法刪除。請先由管理員解鎖後再操作。'); return;
+      }
+      if (!isAdmin(currentUser) && Number(doc.createdById) !== Number(currentUser.id)) {
         ctx.throw(403, '只有文件創建者或管理員可以刪除文件'); return;
       }
       await repo.destroy({ filterByTk });
+      await writeAuditLog({
+        action: 'delete',
+        resourceType: 'docDocuments',
+        resourceId: doc.id,
+        resourceTitle: doc.title,
+        user: currentUser,
+        detail: { status: doc.status, categoryId: doc.categoryId, projectId: doc.projectId },
+      });
       ctx.body = { ok: true };
       await next();
     });
@@ -346,6 +524,16 @@ class PluginDocHubServer extends import_server.Plugin {
         const dup = await repo.findOne({ filter });
         if (dup) { ctx.throw(400, `文件「${title.trim()}」已存在於此資料夾，請使用不同標題`); return; }
       }
+      // Template form doc: convert formData → serialized template content
+      if (values.contentType === 'template' && values.templateId && values.formData) {
+        const tpl = await ctx.db.getRepository('docTemplates').findOne({ filterByTk: values.templateId });
+        docFields.content = serializeTemplateContent({
+          templateId: values.templateId,
+          templateName: tpl ? tpl.name : '',
+          templateVersion: 1,
+          data: values.formData,
+        });
+      }
       const doc = await repo.create({ values: { ...docFields, title, categoryId, projectId, authorId: ctx.state?.currentUser?.id, lastEditorId: ctx.state?.currentUser?.id } });
       // 設定 m2m 關聯（viewers/editors/subscribers）
       if (Array.isArray(viewerIds) && viewerIds.length > 0) {
@@ -362,12 +550,19 @@ class PluginDocHubServer extends import_server.Plugin {
     });
 
     this.app.resourceManager.registerActionHandler('docDocuments:update', async (ctx, next) => {
-      await getCurrentUser(ctx); // 確保 ctx.state.currentUser 被設置（public ACL 需要）
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
       const { filterByTk } = ctx.action.params;
       const values = ctx.action.params.values || ctx.request.body || {};
       const { viewerIds, editorIds, subscriberIds, changeSummary, skipConflictCheck, ...docFields } = values;
 
       const repo = ctx.db.getRepository('docDocuments');
+
+      // 鎖定檢查：鎖定中的文件，非 admin 不能修改
+      const currentForLock = await repo.findOne({ filterByTk });
+      if (currentForLock && currentForLock.locked && !isAdmin(currentUser)) {
+        ctx.throw(403, '此文件已鎖定，無法編輯。如需修改請聯繫管理員解鎖。'); return;
+      }
 
       // 標題唯一性：同 categoryId 下不允許同名（排除自己）
       if (docFields.title && docFields.title.trim()) {
@@ -402,6 +597,17 @@ class PluginDocHubServer extends import_server.Plugin {
         }
       }
 
+      // Template form update: merge formData into existing template content
+      if (values.formData) {
+        const existing = await repo.findOne({ filterByTk });
+        if (existing && isTemplateContent(existing.content)) {
+          const parsed = parseTemplateContent(existing.content);
+          if (parsed) {
+            docFields.content = serializeTemplateContent({ ...parsed, data: { ...(parsed.data || {}), ...values.formData } });
+          }
+        }
+      }
+
       // 更新文件本體欄位（不含 m2m）
       await repo.update({ filterByTk, values: { ...docFields, lastEditorId: ctx.state?.currentUser?.id } });
 
@@ -418,6 +624,14 @@ class PluginDocHubServer extends import_server.Plugin {
 
       // 回傳更新後的文件
       const doc = await repo.findOne({ filterByTk, appends: ['viewers', 'editors', 'subscribers', 'type', 'lastEditor'] });
+      await writeAuditLog({
+        action: 'update',
+        resourceType: 'docDocuments',
+        resourceId: doc?.id,
+        resourceTitle: doc?.title,
+        user: currentUser,
+        detail: { changedFields: Object.keys(docFields) },
+      });
       ctx.body = doc;
       await next();
     });
@@ -442,10 +656,15 @@ class PluginDocHubServer extends import_server.Plugin {
         ghFile = await githubGetFile(doc.githubRepo, filePath, branch);
       } catch (e) {
         this.logger.error('[DocHub] pullFromGit fetch error: ' + e.message);
+        await notifyGitSyncFailed(ctx.db, doc.id, doc.title, 'Git 連線失敗：' + e.message);
+        await writeAuditLog({ action: 'git_sync_failed', resourceId: doc.id, resourceTitle: doc.title, detail: { error: e.message, phase: 'fetch' } });
         ctx.throw(502, 'Git 拉取失敗，請稍後再試');
         return;
       }
       if (!ghFile || !ghFile.content) {
+        const errMsg = ghFile?.message || '找不到檔案';
+        await notifyGitSyncFailed(ctx.db, doc.id, doc.title, errMsg);
+        await writeAuditLog({ action: 'git_sync_failed', resourceId: doc.id, resourceTitle: doc.title, detail: { error: errMsg, phase: 'not_found' } });
         ctx.throw(404, ghFile?.message ? `找不到檔案：${ghFile.message}` : '找不到檔案（請確認 repo / 路徑 / 分支）');
         return;
       }
@@ -457,6 +676,8 @@ class PluginDocHubServer extends import_server.Plugin {
         this.logger.info(`[DocHub] pullFromGit: doc ${filterByTk} pulled sha=${ghFile.sha}`);
       } catch (e) {
         this.logger.error('[DocHub] pullFromGit update error: ' + e.message);
+        await notifyGitSyncFailed(ctx.db, doc.id, doc.title, '拉取成功但寫入失敗：' + e.message);
+        await writeAuditLog({ action: 'git_sync_failed', resourceId: doc.id, resourceTitle: doc.title, detail: { error: e.message, phase: 'update' } });
         ctx.throw(500, 'Git 拉取成功但更新失敗，請稍後再試');
       }
       await next();
@@ -493,6 +714,30 @@ class PluginDocHubServer extends import_server.Plugin {
 
     // webhookReceive：接收 GitLab / GitHub push webhook
     this.app.resourceManager.registerActionHandler('docDocuments:webhookReceive', async (ctx, next) => {
+      // ── Webhook 身份驗證 ──
+      const webhookSecret = process.env.DOCHUB_WEBHOOK_SECRET || '';
+      if (webhookSecret) {
+        // GitLab: X-Gitlab-Token header（純文字比對）
+        const gitlabToken = ctx.request.headers['x-gitlab-token'] || '';
+        // GitHub: X-Hub-Signature-256 header（HMAC-SHA256）
+        const githubSig = ctx.request.headers['x-hub-signature-256'] || '';
+        let authorized = false;
+        if (gitlabToken) {
+          authorized = gitlabToken === webhookSecret;
+        } else if (githubSig) {
+          try {
+            const crypto = require('crypto');
+            const rawBody = JSON.stringify(ctx.request.body || {});
+            const expected = 'sha256=' + crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
+            authorized = crypto.timingSafeEqual(Buffer.from(githubSig), Buffer.from(expected));
+          } catch(e) { authorized = false; }
+        }
+        if (!authorized) {
+          this.logger.warn('[DocHub] webhook: unauthorized request rejected');
+          ctx.throw(401, 'Webhook secret mismatch'); return;
+        }
+      }
+
       const payload = ctx.request.body || {};
 
       // ── 解析 push 資訊（相容 GitHub 和 GitLab payload 格式）──
@@ -554,7 +799,12 @@ class PluginDocHubServer extends import_server.Plugin {
 
             // 從 Git 拉最新內容
             const ghFile = await githubGetFile(docModel.githubRepo, filePath, branch);
-            if (!ghFile || !ghFile.content) continue;
+            if (!ghFile || !ghFile.content) {
+              const errMsg = ghFile?.message || '找不到檔案';
+              await notifyGitSyncFailed(ctx.db, docModel.id, docModel.title, 'Webhook 同步：' + errMsg);
+              await writeAuditLog({ action: 'git_sync_failed', resourceId: docModel.id, resourceTitle: docModel.title, detail: { error: errMsg, phase: 'webhook_not_found' } });
+              continue;
+            }
 
             const content = Buffer.from(ghFile.content, 'base64').toString('utf8');
             await docRepo.update({
@@ -565,6 +815,8 @@ class PluginDocHubServer extends import_server.Plugin {
             this.logger.info(`[DocHub] webhook updated doc id=${docModel.id} sha=${ghFile.sha}`);
           } catch (e) {
             this.logger.error(`[DocHub] webhook update doc ${docModel.id} error: ${e.message}`);
+            await notifyGitSyncFailed(ctx.db, docModel.id, docModel.title, 'Webhook 同步失敗：' + e.message);
+            await writeAuditLog({ action: 'git_sync_failed', resourceId: docModel.id, resourceTitle: docModel.title, detail: { error: e.message, phase: 'webhook_update' } });
           }
         }
       }
@@ -612,15 +864,37 @@ class PluginDocHubServer extends import_server.Plugin {
       await next();
     });
 
-    // 專案 create/update/destroy 限 admin
+    // 專案 create：建立後自動生成 SRS/SDS/SPEC/PM-Doc/Others/上版單 六個預設資料夾
     this.app.resourceManager.registerActionHandler('docProjects:create', async (ctx, next) => {
       const currentUser = await getCurrentUser(ctx);
-      const isAdmin = Number(currentUser?.id) === 1
+      const isAdminUser = Number(currentUser?.id) === 1
         || currentUser?.roles?.some(r => r.name === 'root' || r.name === 'admin');
-      if (!isAdmin) { ctx.throw(403, '只有管理員可以建立專案'); return; }
+      if (!isAdminUser) { ctx.throw(403, '只有管理員可以建立專案'); return; }
       const values = ctx.request.body || {};
-      const repo = ctx.db.getRepository('docProjects');
-      const project = await repo.create({ values });
+      const projRepo = ctx.db.getRepository('docProjects');
+      const catRepo = ctx.db.getRepository('docCategories');
+      const project = await projRepo.create({ values });
+
+      // 自動建立資料夾：優先用 client 傳入的 folders，否則用預設 6 個
+      const clientFolders = Array.isArray(values.folders) ? values.folders : null;
+      const defaultFolders = clientFolders || [
+        { name: 'SRS',    sort: 0 },
+        { name: 'SDS',    sort: 1 },
+        { name: 'SPEC',   sort: 2 },
+        { name: 'PM-Doc', sort: 3 },
+        { name: 'Others', sort: 4 },
+        { name: '上版單', sort: 5 },
+      ];
+      try {
+        for (let i = 0; i < defaultFolders.length; i++) {
+          const f = defaultFolders[i];
+          if (!f.name || !f.name.trim()) continue;
+          await catRepo.create({ values: { name: f.name.trim(), projectId: project.id, sort: f.sort != null ? f.sort : i } });
+        }
+      } catch(e) {
+        this.logger && this.logger.warn('Auto-create folders failed: ' + e.message);
+      }
+
       ctx.body = project;
       await next();
     });
@@ -633,6 +907,50 @@ class PluginDocHubServer extends import_server.Plugin {
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('docProjects');
       await repo.destroy({ filterByTk });
+      ctx.body = { ok: true };
+      await next();
+    });
+
+    // 專案權限：取得目前的 viewer/editor 列表
+    this.app.resourceManager.registerActionHandler('docProjects:getPermissions', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      const { filterByTk } = ctx.action.params;
+      const proj = await ctx.db.getRepository('docProjects').findOne({
+        filterByTk,
+        appends: ['viewers', 'editors', 'subscribers'],
+      });
+      if (!proj) { ctx.throw(404, '專案不存在'); return; }
+      ctx.body = {
+        viewerIds: (proj.viewers || []).map(u => u.id),
+        editorIds: (proj.editors || []).map(u => u.id),
+        subscriberIds: (proj.subscribers || []).map(u => u.id),
+        viewers: proj.viewers || [],
+        editors: proj.editors || [],
+        subscribers: proj.subscribers || [],
+      };
+    });
+
+    // 專案權限：設定 viewer/editor（限 admin）
+    this.app.resourceManager.registerActionHandler('docProjects:setPermissions', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      if (!isAdmin(currentUser)) { ctx.throw(403, '只有管理員可以設定專案權限'); return; }
+      const { filterByTk } = ctx.action.params;
+      const body = ctx.request.body || {};
+      const { viewerIds, editorIds, subscriberIds } = body;
+      const projRepo = ctx.db.getRepository('docProjects');
+      const proj = await projRepo.findOne({ filterByTk });
+      if (!proj) { ctx.throw(404, '專案不存在'); return; }
+      if (Array.isArray(viewerIds)) {
+        await ctx.db.getRepository('docProjects.viewers', filterByTk).set(viewerIds);
+      }
+      if (Array.isArray(editorIds)) {
+        await ctx.db.getRepository('docProjects.editors', filterByTk).set(editorIds);
+      }
+      if (Array.isArray(subscriberIds)) {
+        await ctx.db.getRepository('docProjects.subscribers', filterByTk).set(subscriberIds);
+      }
       ctx.body = { ok: true };
       await next();
     });
@@ -673,8 +991,71 @@ class PluginDocHubServer extends import_server.Plugin {
       await next();
     });
 
+    // 文件鎖定（admin only，需二次確認由前端處理）
+    this.app.resourceManager.registerActionHandler('docDocuments:lock', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      if (!isAdmin(currentUser)) { ctx.throw(403, '只有管理員可以鎖定文件'); return; }
+      const { filterByTk } = ctx.action.params;
+      const repo = ctx.db.getRepository('docDocuments');
+      const doc = await repo.findOne({ filterByTk });
+      if (!doc) { ctx.throw(404, '文件不存在'); return; }
+      if (doc.locked) { ctx.body = { ok: true, locked: true, message: '文件已是鎖定狀態' }; return; }
+      await repo.update({ filterByTk, values: { locked: true } });
+      await writeAuditLog({ action: 'lock', resourceId: doc.id, resourceTitle: doc.title, user: currentUser });
+      ctx.body = { ok: true, locked: true };
+      await next();
+    });
+
+    // 文件解鎖（admin only）
+    this.app.resourceManager.registerActionHandler('docDocuments:unlock', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      if (!isAdmin(currentUser)) { ctx.throw(403, '只有管理員可以解鎖文件'); return; }
+      const { filterByTk } = ctx.action.params;
+      const repo = ctx.db.getRepository('docDocuments');
+      const doc = await repo.findOne({ filterByTk });
+      if (!doc) { ctx.throw(404, '文件不存在'); return; }
+      if (!doc.locked) { ctx.body = { ok: true, locked: false, message: '文件已是未鎖定狀態' }; return; }
+      await repo.update({ filterByTk, values: { locked: false } });
+      await writeAuditLog({ action: 'unlock', resourceId: doc.id, resourceTitle: doc.title, user: currentUser });
+      ctx.body = { ok: true, locked: false };
+      await next();
+    });
+
+    // 稽核日誌查詢（admin only）
+    this.app.resourceManager.registerActionHandler('docAuditLogs:list', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      if (!isAdmin(currentUser)) { ctx.throw(403, '只有管理員可以查看稽核日誌'); return; }
+      const params = ctx.action.params;
+      const pageSize = parseInt(params.pageSize) || 50;
+      const page = parseInt(params.page) || 1;
+      const filter = params.filter || {};
+      const where = {};
+      if (filter.action) where.action = filter.action;
+      if (filter.userId) where.userId = filter.userId;
+      if (filter.resourceType) where.resourceType = filter.resourceType;
+      const { Op } = require('sequelize');
+      if (filter.resourceTitle) where.resourceTitle = { [Op.iLike]: '%' + filter.resourceTitle + '%' };
+      if (filter.dateFrom || filter.dateTo) {
+        where.createdAt = {};
+        if (filter.dateFrom) where.createdAt[Op.gte] = new Date(filter.dateFrom);
+        if (filter.dateTo) where.createdAt[Op.lte] = new Date(filter.dateTo);
+      }
+      const repo = ctx.db.getRepository('docAuditLogs');
+      const { count, rows } = await repo.model.findAndCountAll({
+        where, order: [['createdAt', 'DESC']],
+        limit: pageSize, offset: (page - 1) * pageSize,
+      });
+      ctx.body = rows.map(r => r.toJSON());
+      ctx.meta = { count, page, pageSize, totalPage: Math.ceil(count / pageSize) };
+    });
+
     // 文件拖曳排序：接收新的 id 順序陣列，批次更新 sort 欄位
     this.app.resourceManager.registerActionHandler('docDocuments:reorder', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
       const { ids } = ctx.request.body || {};
       if (!Array.isArray(ids) || ids.length === 0) { ctx.throw(400, 'ids required'); return; }
       const repo = ctx.db.getRepository('docDocuments');
@@ -685,6 +1066,8 @@ class PluginDocHubServer extends import_server.Plugin {
 
     // 資料夾拖曳排序
     this.app.resourceManager.registerActionHandler('docCategories:reorder', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
       const { ids } = ctx.request.body || {};
       if (!Array.isArray(ids) || ids.length === 0) { ctx.throw(400, 'ids required'); return; }
       const repo = ctx.db.getRepository('docCategories');
@@ -693,19 +1076,276 @@ class PluginDocHubServer extends import_server.Plugin {
       await next();
     });
 
+    // 資料夾權限：取得目前的 viewer/editor 列表
+    this.app.resourceManager.registerActionHandler('docCategories:getPermissions', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      const { filterByTk } = ctx.action.params;
+      const cat = await ctx.db.getRepository('docCategories').findOne({
+        filterByTk,
+        appends: ['viewers', 'editors'],
+      });
+      if (!cat) { ctx.throw(404, '資料夾不存在'); return; }
+      ctx.body = {
+        viewerIds: (cat.viewers || []).map(u => u.id),
+        editorIds: (cat.editors || []).map(u => u.id),
+        viewers: cat.viewers || [],
+        editors: cat.editors || [],
+      };
+    });
+
+    // 資料夾權限：設定 viewer/editor（限 admin）
+    this.app.resourceManager.registerActionHandler('docCategories:setPermissions', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      if (!isAdmin(currentUser)) { ctx.throw(403, '只有管理員可以設定資料夾權限'); return; }
+      const { filterByTk } = ctx.action.params;
+      const body = ctx.request.body || {};
+      const { viewerIds, editorIds } = body;
+      const catRepo = ctx.db.getRepository('docCategories');
+      const cat = await catRepo.findOne({ filterByTk });
+      if (!cat) { ctx.throw(404, '資料夾不存在'); return; }
+      if (Array.isArray(viewerIds)) {
+        await ctx.db.getRepository('docCategories.viewers', filterByTk).set(viewerIds);
+      }
+      if (Array.isArray(editorIds)) {
+        await ctx.db.getRepository('docCategories.editors', filterByTk).set(editorIds);
+      }
+      ctx.body = { ok: true };
+      await next();
+    });
+
+    // ── Template content helpers ─────────────────────────────────────────────
+    var TEMPLATE_PREFIX = 'TEMPLATE_FORM_V1\n';
+    function isTemplateContent(content) {
+      return typeof content === 'string' && content.startsWith(TEMPLATE_PREFIX);
+    }
+    function parseTemplateContent(content) {
+      try { return JSON.parse(content.slice(TEMPLATE_PREFIX.length)); } catch(e) { return null; }
+    }
+    function serializeTemplateContent(obj) {
+      return TEMPLATE_PREFIX + JSON.stringify(obj);
+    }
+
+    // ── docTemplates CRUD handlers ───────────────────────────────────────────
+    this.app.resourceManager.registerActionHandler('docTemplates:list', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, 'Unauthorized'); return; }
+      const repo = ctx.db.getRepository('docTemplates');
+      const filter = { status: 'active' };
+      const rows = await repo.find({ filter, sort: ['sort', 'createdAt'] });
+      ctx.body = rows;
+      ctx.meta = { count: rows.length };
+    });
+
+    this.app.resourceManager.registerActionHandler('docTemplates:get', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, 'Unauthorized'); return; }
+      const id = ctx.action.params.filterByTk || ctx.action.params.id;
+      const repo = ctx.db.getRepository('docTemplates');
+      const row = await repo.findOne({ filterByTk: id });
+      if (!row) { ctx.throw(404, 'Template not found'); return; }
+      ctx.body = row;
+    });
+
+    this.app.resourceManager.registerActionHandler('docTemplates:create', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, 'Unauthorized'); return; }
+      if (!isAdmin(currentUser)) { ctx.throw(403, 'Admin only'); return; }
+      const body = ctx.request.body || {};
+      // label → name auto-conversion happens on client; server receives ready-to-save fields
+      var name = (body.name || '').trim();
+      if (!name) { ctx.throw(400, 'Template name required'); return; }
+      const repo = ctx.db.getRepository('docTemplates');
+      const tpl = await repo.create({
+        values: {
+          name,
+          description: body.description || '',
+          fields: body.fields || [],
+          defaultCategoryId: body.defaultCategoryId || null,
+          projectId: body.projectId || null,
+          listDisplayFields: body.listDisplayFields || [],
+          status: 'active',
+          sort: body.sort || 0,
+          createdById: currentUser.id,
+          updatedById: currentUser.id,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }
+      });
+      await writeAuditLog({ action: 'template_create', resourceType: 'docTemplates', resourceId: tpl.id, resourceTitle: name, user: currentUser, detail: { fields: (body.fields || []).length } });
+      ctx.body = tpl;
+    });
+
+    this.app.resourceManager.registerActionHandler('docTemplates:update', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, 'Unauthorized'); return; }
+      if (!isAdmin(currentUser)) { ctx.throw(403, 'Admin only'); return; }
+      const id = ctx.action.params.filterByTk || ctx.action.params.id;
+      const body = ctx.request.body || {};
+      const repo = ctx.db.getRepository('docTemplates');
+      const existing = await repo.findOne({ filterByTk: id });
+      if (!existing) { ctx.throw(404, 'Template not found'); return; }
+      const updates = { updatedById: currentUser.id, updatedAt: new Date() };
+      if (body.name !== undefined) updates.name = (body.name || '').trim();
+      if (body.description !== undefined) updates.description = body.description;
+      if (body.fields !== undefined) updates.fields = body.fields;
+      if (body.defaultCategoryId !== undefined) updates.defaultCategoryId = body.defaultCategoryId;
+      if (body.projectId !== undefined) updates.projectId = body.projectId;
+      if (body.listDisplayFields !== undefined) updates.listDisplayFields = body.listDisplayFields;
+      if (body.status !== undefined) updates.status = body.status;
+      if (body.sort !== undefined) updates.sort = body.sort;
+      const updated = await repo.update({ filterByTk: id, values: updates });
+      await writeAuditLog({ action: 'template_update', resourceType: 'docTemplates', resourceId: id, resourceTitle: updates.name || existing.name, user: currentUser });
+      ctx.body = updated;
+    });
+
+    this.app.resourceManager.registerActionHandler('docTemplates:destroy', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, 'Unauthorized'); return; }
+      if (!isAdmin(currentUser)) { ctx.throw(403, 'Admin only'); return; }
+      const id = ctx.action.params.filterByTk || ctx.action.params.id;
+      const repo = ctx.db.getRepository('docTemplates');
+      const existing = await repo.findOne({ filterByTk: id });
+      if (!existing) { ctx.throw(404, 'Template not found'); return; }
+      // Soft delete: set status=archived
+      await repo.update({ filterByTk: id, values: { status: 'archived', updatedAt: new Date() } });
+      await writeAuditLog({ action: 'template_delete', resourceType: 'docTemplates', resourceId: id, resourceTitle: existing.name, user: currentUser });
+      ctx.body = { ok: true };
+    });
+
     this.app.acl.registerSnippet({
       name: 'pm.' + this.name,
-      actions: ['docGroups:*', 'docProjects:*', 'docDocuments:*', 'docCategories:*', 'docVersions:*', 'docTypes:*'],
+      actions: ['docGroups:*', 'docProjects:*', 'docDocuments:*', 'docCategories:*', 'docVersions:*', 'docTypes:*', 'docTemplates:*'],
     });
     // 用 public 讓 NocoBase member 角色也能進入，DocHub 自己的 handler 負責權限控制
     // 注意：public ACL 不會 inject currentUser，handler 需要自行從 ctx.auth.user 或 token 取得
     // 用 public 讓所有角色（包含 member）都能通過 ACL，handler 自己負責權限過濾
     // public ACL 不會 inject currentUser，由 getCurrentUser() helper 手動從 auth 取得
-    this.app.acl.allow('docDocuments', ['syncToGit', 'search', 'list', 'update', 'get', 'create', 'pullFromGit', 'fetchFromGit', 'destroy', 'reorder', 'webhookReceive'], 'public');
-    this.app.acl.allow('docProjects', ['list', 'get', 'create', 'update', 'destroy', 'syncToGit'], 'public');
+    this.app.acl.allow('docDocuments', ['syncToGit', 'search', 'list', 'update', 'get', 'create', 'pullFromGit', 'fetchFromGit', 'destroy', 'reorder', 'webhookReceive', 'count', 'updateSummary', 'uploadImage', 'lock', 'unlock'], 'public');
+    this.app.acl.allow('docAuditLogs', ['list'], 'public');
+    this.app.acl.allow('docProjects', ['list', 'get', 'create', 'update', 'destroy', 'syncToGit', 'getPermissions', 'setPermissions'], 'public');
     this.app.acl.allow('docGroups', ['list', 'get', 'create', 'update', 'destroy'], 'public');
-    this.app.acl.allow('docCategories', ['list', 'get', 'create', 'update', 'destroy', 'reorder'], 'public');
+    this.app.acl.allow('docCategories', ['list', 'get', 'create', 'update', 'destroy', 'reorder', 'getPermissions', 'setPermissions'], 'public');
     this.app.acl.allow('docVersions', ['list', 'updateSummary'], 'public');
+    this.app.acl.allow('docTypes', ['list', 'get', 'update'], 'public');
+    this.app.acl.allow('docTemplates', ['list', 'get', 'create', 'update', 'destroy'], 'public');
+
+    // 種子資料：確保預設 docTypes 存在（idempotent）
+    try {
+      const typeRepo = this.db.getRepository('docTypes');
+      const RELEASE_NOTE_TEMPLATE = [
+        '# 上版單',
+        '',
+        '## 基本資訊',
+        '',
+        '| 項目 | 內容 |',
+        '|------|------|',
+        '| 專案名稱 | |',
+        '| 版本號 | v |',
+        '| 上版日期 | YYYY-MM-DD |',
+        '| 上版時間 | HH:MM |',
+        '| 上版環境 | □ 開發  □ 測試  □ 預產  □ 正式 |',
+        '| 負責人 | |',
+        '| 審核人 | |',
+        '',
+        '---',
+        '',
+        '## 上版內容',
+        '',
+        '### 變更摘要',
+        '',
+        '> 簡短說明此次上版的主要目的與範圍',
+        '',
+        '',
+        '',
+        '### 變更清單',
+        '',
+        '| # | 變更項目 | 類型 | 影響範圍 | 備註 |',
+        '|---|----------|------|----------|------|',
+        '| 1 | | □ 新功能 □ 修正 □ 優化 □ 設定 | | |',
+        '| 2 | | □ 新功能 □ 修正 □ 優化 □ 設定 | | |',
+        '| 3 | | □ 新功能 □ 修正 □ 優化 □ 設定 | | |',
+        '',
+        '---',
+        '',
+        '## 上版前檢查',
+        '',
+        '| 檢查項目 | 確認 | 備註 |',
+        '|----------|------|------|',
+        '| 程式碼已通過 Code Review | □ | |',
+        '| 測試環境已驗證通過 | □ | |',
+        '| DB Migration 腳本已準備 | □ N/A □ 已準備 | |',
+        '| 環境變數 / 設定檔已更新 | □ N/A □ 已更新 | |',
+        '| 備份計畫已確認 | □ N/A □ 已確認 | |',
+        '| 回滾計畫已確認 | □ N/A □ 已確認 | |',
+        '| 相關人員已通知 | □ | |',
+        '',
+        '---',
+        '',
+        '## 上版流程',
+        '',
+        '| 步驟 | 操作項目 | 執行人 | 預計時間 | 完成 |',
+        '|------|----------|--------|----------|------|',
+        '| 1 | 通知相關人員進入維護模式 | | | □ |',
+        '| 2 | 建立當前版本備份 | | | □ |',
+        '| 3 | 執行 DB Migration | | | □ |',
+        '| 4 | 部署新版程式碼 | | | □ |',
+        '| 5 | 重啟服務 | | | □ |',
+        '| 6 | 執行 Smoke Test | | | □ |',
+        '| 7 | 確認監控指標正常 | | | □ |',
+        '| 8 | 通知相關人員上版完成 | | | □ |',
+        '',
+        '---',
+        '',
+        '## 上版後驗證',
+        '',
+        '| 驗證項目 | 結果 | 驗證人 |',
+        '|----------|------|--------|',
+        '| 主要功能正常 | □ 通過 □ 異常 | |',
+        '| 效能指標正常 | □ 通過 □ 異常 | |',
+        '| 錯誤日誌無異常 | □ 通過 □ 異常 | |',
+        '',
+        '---',
+        '',
+        '## 問題記錄',
+        '',
+        '> 如上版過程中發生任何問題，記錄於此',
+        '',
+        '| 時間 | 問題描述 | 處理方式 | 狀態 |',
+        '|------|----------|----------|------|',
+        '| | | | □ 處理中 □ 已解決 |',
+        '',
+        '---',
+        '',
+        '## 簽核',
+        '',
+        '| 角色 | 姓名 | 簽核時間 |',
+        '|------|------|----------|',
+        '| 上版負責人 | | |',
+        '| 專案主管 | | |',
+      ].join('\n');
+
+      const defaultTypes = [
+        { id: 2, name: 'SRS', color: 'blue', sort: 1, template: null },
+        { id: 3, name: 'SDS', color: 'purple', sort: 2, template: null },
+        { id: 4, name: 'SPEC', color: 'cyan', sort: 3, template: null },
+        { id: 5, name: 'PM-Doc', color: 'orange', sort: 4, template: null },
+        { id: 6, name: 'Others', color: 'default', sort: 5, template: null },
+        { id: 7, name: '上版單', color: 'red', sort: 6, template: RELEASE_NOTE_TEMPLATE },
+      ];
+      for (const t of defaultTypes) {
+        const exists = await typeRepo.findOne({ filter: { id: t.id } });
+        if (!exists) {
+          await typeRepo.create({ values: t });
+        } else if (t.id === 7 && !exists.template) {
+          // 補上 template 欄位（如果已存在但沒有 template）
+          await typeRepo.update({ filter: { id: 7 }, values: { template: RELEASE_NOTE_TEMPLATE } });
+        }
+      }
+    } catch(e) {
+      this.logger && this.logger.warn('docTypes seed error: ' + (e && e.message));
+    }
 
     // 版本摘要修改：只有版本的 editorId 或 admin 可修改 changeSummary
     this.app.resourceManager.registerActionHandler('docVersions:updateSummary', async (ctx, next) => {
@@ -727,6 +1367,8 @@ class PluginDocHubServer extends import_server.Plugin {
     // 自動版本記錄 + 訂閱者通知
     this.db.on('docDocuments.afterCreate', async (model, options) => {
       const currentUser = options?.context?.state?.currentUser;
+      // Audit log：建立文件
+      await writeAuditLog({ action: 'create', resourceId: model.id, resourceTitle: model.title, user: currentUser });
       // 確保 createdById 有被記錄（owner）
       if (currentUser?.id && !model.createdById) {
         try {
@@ -813,7 +1455,21 @@ class PluginDocHubServer extends import_server.Plugin {
       try {
         const docRepo = this.db.getRepository('docDocuments');
         const doc = await docRepo.findOne({ filterByTk: model.id, appends: ['subscribers', 'category'] });
-        const subscribers = doc?.subscribers || [];
+        const docSubscribers = doc?.subscribers || [];
+        // 合併專案層訂閱者
+        let projSubscribers = [];
+        if (doc?.projectId) {
+          try {
+            const proj = await this.db.getRepository('docProjects').findOne({ filterByTk: doc.projectId, appends: ['subscribers'] });
+            projSubscribers = proj?.subscribers || [];
+          } catch(e) {}
+        }
+        // 合併去重（用 id）
+        const seenIds = new Set();
+        const subscribers = [];
+        for (const u of [...docSubscribers, ...projSubscribers]) {
+          if (!seenIds.has(u.id)) { seenIds.add(u.id); subscribers.push(u); }
+        }
         this.logger.info(`[DocHub notify] docId=${model.id} subscribers=${subscribers.length} currentUserId=${currentUser?.id}`);
         if (subscribers.length === 0) return;
 

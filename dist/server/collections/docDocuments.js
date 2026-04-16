@@ -18,6 +18,7 @@ module.exports = (0, import_database.defineCollection)({
     { type: 'string', name: 'githubFilePath' },
     { type: 'string', name: 'githubBranch', defaultValue: 'master' },
     { type: 'integer', name: 'sort', defaultValue: 0 },
+    { type: 'boolean', name: 'locked', defaultValue: false },
     { type: 'belongsTo', name: 'author', target: 'users', foreignKey: 'authorId' },
     { type: 'belongsTo', name: 'lastEditor', target: 'users', foreignKey: 'lastEditorId' },
     { type: 'belongsTo', name: 'createdBy', target: 'users', foreignKey: 'createdById' },
