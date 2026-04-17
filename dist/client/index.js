@@ -1122,56 +1122,39 @@ function genFieldId() { return 'f_'+Math.random().toString(36).slice(2,9); }
 
 // ── NewDocModal ───────────────────────────────────────────────────────────────
 function NewDocModal(props) {
-  // props: open, onCancel, onFreeWrite, onTemplate, onGitSync
+  // props: open, onCancel, onFreeWrite, onTemplate, onGitSync, hasCat
   var open = props.open; var onCancel = props.onCancel;
   var onFreeWrite = props.onFreeWrite; var onTemplate = props.onTemplate;
-  var onGitSync = props.onGitSync;
-  return h(Modal, {
-    title: '新增文件',
-    open: open,
-    onCancel: onCancel,
-    footer: null,
-    width: 480,
-  },
-    h('div', {style:{display:'flex',flexDirection:'column',gap:16,padding:'8px 0'}},
-      h('p', {style:{color:'#595959',margin:0,fontSize:14}}, '請選擇新增方式：'),
-      h('div', {style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}},
-        // 自由撰寫
-        h('div', {
-          onClick: onFreeWrite,
-          style:{border:'1px solid #d9d9d9',borderRadius:8,padding:'20px 12px',textAlign:'center',cursor:'pointer',
-            transition:'all 0.2s',background:'#fafafa'},
-          onMouseEnter:function(e){e.currentTarget.style.borderColor='#1677ff';e.currentTarget.style.background='#e6f4ff';},
-          onMouseLeave:function(e){e.currentTarget.style.borderColor='#d9d9d9';e.currentTarget.style.background='#fafafa';}
-        },
-          h('div',{style:{fontSize:28,marginBottom:8}},'✍️'),
-          h('div',{style:{fontSize:13,fontWeight:600,color:'#1a1f26',marginBottom:4}},'自由撰寫'),
-          h('div',{style:{fontSize:11,color:'#8c8c8c',lineHeight:1.4}},'Markdown 格式自由撰寫')
-        ),
-        // 使用範本
-        h('div', {
-          onClick: onTemplate,
-          style:{border:'1px solid #d9d9d9',borderRadius:8,padding:'20px 12px',textAlign:'center',cursor:'pointer',
-            transition:'all 0.2s',background:'#fafafa'},
-          onMouseEnter:function(e){e.currentTarget.style.borderColor='#1677ff';e.currentTarget.style.background='#e6f4ff';},
-          onMouseLeave:function(e){e.currentTarget.style.borderColor='#d9d9d9';e.currentTarget.style.background='#fafafa';}
-        },
-          h('div',{style:{fontSize:28,marginBottom:8}},'📋'),
-          h('div',{style:{fontSize:13,fontWeight:600,color:'#1a1f26',marginBottom:4}},'使用範本'),
-          h('div',{style:{fontSize:11,color:'#8c8c8c',lineHeight:1.4}},'使用預設表單範本填寫')
-        ),
-        // Git 同步
-        h('div', {
-          onClick: onGitSync,
-          style:{border:'1px solid #d9d9d9',borderRadius:8,padding:'20px 12px',textAlign:'center',cursor:'pointer',
-            transition:'all 0.2s',background:'#fafafa'},
-          onMouseEnter:function(e){e.currentTarget.style.borderColor='#1677ff';e.currentTarget.style.background='#e6f4ff';},
-          onMouseLeave:function(e){e.currentTarget.style.borderColor='#d9d9d9';e.currentTarget.style.background='#fafafa';}
-        },
-          h('div',{style:{fontSize:28,marginBottom:8}},'🔄'),
-          h('div',{style:{fontSize:13,fontWeight:600,color:'#1a1f26',marginBottom:4}},'Git 同步'),
-          h('div',{style:{fontSize:11,color:'#8c8c8c',lineHeight:1.4}},'從 GitHub 倉庫拉取文件')
-        )
+  var onGitSync = props.onGitSync; var hasCat = !!props.hasCat;
+  function cardStyle(disabled) {
+    return {border:'1px solid '+(disabled?'#f0f0f0':'#d9d9d9'),borderRadius:8,padding:'20px 12px',textAlign:'center',
+      cursor:disabled?'not-allowed':'pointer',transition:'all 0.2s',
+      background:disabled?'#fafafa':'#fafafa',opacity:disabled?0.5:1};
+  }
+  function makeCard(emoji, title, desc, onClick, disabled) {
+    return h(Tooltip,{title:disabled?'請先在左側選擇資料夾':null},
+      h('div',{
+        onClick:disabled?null:onClick,
+        style:cardStyle(disabled),
+        onMouseEnter:function(e){if(!disabled){e.currentTarget.style.borderColor='#1677ff';e.currentTarget.style.background='#e6f4ff';}},
+        onMouseLeave:function(e){if(!disabled){e.currentTarget.style.borderColor='#d9d9d9';e.currentTarget.style.background='#fafafa';}}
+      },
+        h('div',{style:{fontSize:28,marginBottom:8}},emoji),
+        h('div',{style:{fontSize:13,fontWeight:600,color:disabled?'#bbb':'#1a1f26',marginBottom:4}},title),
+        h('div',{style:{fontSize:11,color:'#8c8c8c',lineHeight:1.4}},desc)
+      )
+    );
+  }
+  return h(Modal,{title:'新增文件',open:open,onCancel:onCancel,footer:null,width:480},
+    h('div',{style:{display:'flex',flexDirection:'column',gap:16,padding:'8px 0'}},
+      !hasCat&&h('div',{style:{background:'#fffbe6',border:'1px solid #ffe58f',borderRadius:6,padding:'8px 12px',fontSize:13,color:'#ad6800'}},
+        '⚠️ 請先在左側選擇資料夾，才能新增文件'
+      ),
+      h('p',{style:{color:'#595959',margin:0,fontSize:14}},'請選擇新增方式：'),
+      h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}},
+        makeCard('✍️','自由撰寫','Markdown 格式自由撰寫',onFreeWrite,!hasCat),
+        makeCard('📋','使用範本','使用預設表單範本填寫',onTemplate,!hasCat),
+        makeCard('🔄','Git 同步','從 GitHub 倉庫拉取文件',onGitSync,!hasCat)
       )
     )
   );
@@ -2275,6 +2258,13 @@ function ListPage(){
             }},'權限'),
             activeCatId&&isAdminUser&&h(Dropdown,{trigger:['click'],overlay:h(Menu,{onClick:function(info){if(info.key==='del'){var cat=allCatsList.find(function(x){return x.id===activeCatId;});if(cat)setInfoDelCat(cat);}}},h(Menu.Item,{key:'del',danger:true,icon:h(DeleteOutlined)},'刪除資料夾'))},
               h(Button,{icon:h(ExclamationCircleOutlined),style:{color:'#ff4d4f',borderColor:'#ff4d4f'}})
+            ),
+            !activeCatId&&activeProjectId&&isAdminUser&&h(Button,{icon:h(LockOutlined),onClick:function(){
+              var proj=allProjectsList.find(function(x){return x.id===activeProjectId;});
+              if(proj)openInfoPermModal(proj);
+            }},'權限'),
+            !activeCatId&&activeProjectId&&isAdminUser&&h(Dropdown,{trigger:['click'],overlay:h(Menu,{onClick:function(info){if(info.key==='del'){var proj=allProjectsList.find(function(x){return x.id===activeProjectId;});if(proj)setInfoDelProj(proj);}}},h(Menu.Item,{key:'del',danger:true,icon:h(DeleteOutlined)},'刪除專案'))},
+              h(Button,{icon:h(ExclamationCircleOutlined),style:{color:'#ff4d4f',borderColor:'#ff4d4f'}})
             )
           )
         ),
@@ -2331,12 +2321,7 @@ function ListPage(){
                 )
               )
             ),
-            !activeCatId&&isAdminUser&&h('div',{style:{display:'flex',gap:8,flexShrink:0,alignItems:'center'}},
-              h(Button,{onClick:function(){openInfoPermModal(proj);},icon:h(LockOutlined)},'權限'),
-              h(Dropdown,{trigger:['click'],overlay:h(Menu,{onClick:function(info){if(info.key==='del')setInfoDelProj(proj);}},h(Menu.Item,{key:'del',danger:true,icon:h(DeleteOutlined)},'刪除專案'))},
-                h(Button,{icon:h(ExclamationCircleOutlined),style:{color:'#ff4d4f',borderColor:'#ff4d4f'}})
-              )
-            )
+            null
           );
         })(),
         // Type tabs
@@ -2482,6 +2467,7 @@ function ListPage(){
     // ── New Doc Modal
     h(NewDocModal,{
       open:showNewDocModal,
+      hasCat:!!activeCatId,
       onCancel:function(){setShowNewDocModal(false);},
       onFreeWrite:function(){
         setShowNewDocModal(false);

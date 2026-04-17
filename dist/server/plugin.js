@@ -210,8 +210,15 @@ class PluginDocHubServer extends import_server.Plugin {
       const replacements = {};
 
       if (tsQuery) {
-        whereParts.push(`"docDocuments".search_vector @@ to_tsquery('simple', :tsQuery)`);
+        // 全文搜尋：文件 search_vector OR 資料夾名稱 OR 專案名稱/描述
         replacements.tsQuery = tsQuery;
+        replacements.likeQ = '%' + q.replace(/%/g, '\\%').replace(/_/g, '\\_') + '%';
+        whereParts.push(`(
+          "docDocuments".search_vector @@ to_tsquery('simple', :tsQuery)
+          OR "docCategories".name ILIKE :likeQ
+          OR "docProjects".name ILIKE :likeQ
+          OR "docProjects".description ILIKE :likeQ
+        )`);
       }
       if (categoryId) { whereParts.push(`"docDocuments"."categoryId" = :categoryId`); replacements.categoryId = categoryId; }
       if (projectId) { whereParts.push(`"docDocuments"."projectId" = :projectId`); replacements.projectId = projectId; }
@@ -226,6 +233,12 @@ class PluginDocHubServer extends import_server.Plugin {
       const whereSQL = whereParts.join(' AND ');
       const offset = (page - 1) * pageSize;
 
+      // JOIN 專案和資料夾（搜尋名稱/描述用）
+      const joinSQL = `
+        LEFT JOIN "docCategories" ON "docCategories".id = "docDocuments"."categoryId"
+        LEFT JOIN "docProjects" ON "docProjects".id = "docDocuments"."projectId"
+      `;
+
       // ts_rank 排序（有搜尋時），否則 updatedAt DESC
       const orderSQL = tsQuery
         ? `ts_rank("docDocuments".search_vector, to_tsquery('simple', :tsQuery)) DESC, "docDocuments"."updatedAt" DESC`
@@ -237,7 +250,7 @@ class PluginDocHubServer extends import_server.Plugin {
         : '';
 
       const countResult = await sequelize.query(
-        `SELECT COUNT(*) AS total FROM "docDocuments" WHERE ${whereSQL}`,
+        `SELECT COUNT(*) AS total FROM "docDocuments" ${joinSQL} WHERE ${whereSQL}`,
         { replacements, type: sequelize.QueryTypes.SELECT }
       );
       const total = parseInt(countResult[0]?.total || 0);
@@ -251,6 +264,7 @@ class PluginDocHubServer extends import_server.Plugin {
                 "docDocuments"."lastEditorId", "docDocuments"."authorId"
                 ${headlineSQL}
          FROM "docDocuments"
+         ${joinSQL}
          WHERE ${whereSQL}
          ORDER BY ${orderSQL}
          LIMIT :limit OFFSET :offset`,
