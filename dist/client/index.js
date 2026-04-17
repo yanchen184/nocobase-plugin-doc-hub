@@ -118,9 +118,15 @@ function useDocList(qSearch,qCategoryId,qTypeId,qStatus,qProjectId){
       if(qTypeId)params.typeId=qTypeId;
       if(qStatus&&qStatus!=='all')params.status=qStatus;
       if(qProjectId)params.projectId=qProjectId;
+      if(!qCategoryId&&qProjectId)params.requireCategory=1;
     } else {
       var filter={};
-      if(qCategoryId)filter.categoryId=qCategoryId;
+      if(qCategoryId){
+        filter.categoryId=qCategoryId;
+      } else if(qProjectId) {
+        // 只選專案未選資料夾時，只顯示有 categoryId 的文件（排除未分組）
+        filter.categoryId={'$notNull':true};
+      }
       if(qTypeId)filter.typeId=qTypeId;
       if(qStatus&&qStatus!=='all')filter.status=qStatus;
       if(qProjectId)filter.projectId=qProjectId;
@@ -1929,7 +1935,7 @@ function ListPage(){
   var _tt=useState('all');var typeTab=_tt[0];var setTypeTab=_tt[1];
   var _dq=useState('');var debouncedSearch=_dq[0];var setDebouncedSearch=_dq[1];
   useEffect(function(){
-    var t=setTimeout(function(){setDebouncedSearch(search);},400);
+    var t=setTimeout(function(){setDebouncedSearch(search.slice(0,200));},400);
     return function(){clearTimeout(t);};
   },[search]);
   useEffect(function(){

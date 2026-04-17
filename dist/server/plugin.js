@@ -177,13 +177,14 @@ class PluginDocHubServer extends import_server.Plugin {
     // 全文搜尋 action（title + content ILIKE）
     this.app.resourceManager.registerActionHandler('docDocuments:search', async (ctx, next) => {
       const currentUser = await getCurrentUser(ctx);
-      const q = (ctx.action.params.q || '').trim();
+      const q = (ctx.action.params.q || '').trim().slice(0, 200);
       const pageSize = Math.min(parseInt(ctx.action.params.pageSize) || 20, 200);
       const page = parseInt(ctx.action.params.page) || 1;
       const categoryId = ctx.action.params.categoryId || null;
       const typeId = ctx.action.params.typeId || null;
       const status = ctx.action.params.status || null;
       const projectId = ctx.action.params.projectId || null;
+      const requireCategory = !!ctx.action.params.requireCategory;
 
       if (!currentUser) { ctx.body = []; ctx.meta = { count: 0, page, pageSize, totalPage: 0 }; return; }
 
@@ -221,6 +222,7 @@ class PluginDocHubServer extends import_server.Plugin {
         )`);
       }
       if (categoryId) { whereParts.push(`"docDocuments"."categoryId" = :categoryId`); replacements.categoryId = categoryId; }
+      else if (requireCategory) { whereParts.push(`"docDocuments"."categoryId" IS NOT NULL`); }
       if (projectId) { whereParts.push(`"docDocuments"."projectId" = :projectId`); replacements.projectId = projectId; }
       if (typeId) { whereParts.push(`"docDocuments"."typeId" = :typeId`); replacements.typeId = typeId; }
       if (status) { whereParts.push(`"docDocuments".status = :status`); replacements.status = status; }
