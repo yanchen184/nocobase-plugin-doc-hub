@@ -58,6 +58,7 @@ let docPublishedId: number  // 已發布、有 Git、豐富內容
 let docDraftId: number      // 草稿
 let docLockedId: number     // 已鎖定
 let docTemplateId: number   // 由範本填寫產生
+let demoTemplateId: number  // 截圖用範本定義 ID
 
 // ── 截圖工具 ─────────────────────────────────────────────────────────────────
 
@@ -285,7 +286,7 @@ test.beforeAll(async () => {
   const p1 = await api.createProject({
     name: 'wez-spring-boot-starters',
     description: '企業級 Spring Boot Starter 元件庫，涵蓋安全性、多資料源、稽核日誌、通知等模組。',
-    githubRepo: 'wezoomtek/wez-spring-boot-starters',
+    githubRepo: '10.1.2.191/wezoomtek/wez-spring-boot-starters',
   }).catch(() => null)
   if (p1?.id) { proj1Id = p1.id; cleanup.push(() => api.deleteProject(proj1Id)) }
 
@@ -343,11 +344,20 @@ test.beforeAll(async () => {
     projectId: proj1Id || undefined,
     categoryId: cat11Id || undefined,
     status: 'published',
-    githubRepo: 'wezoomtek/wez-spring-boot-starters',
+    githubRepo: '10.1.2.191/wezoomtek/wez-spring-boot-starters',
     githubFilePath: 'docs/quick-start.md',
     githubBranch: 'main',
   } as any).catch(() => null)
-  if (d1?.id) { docPublishedId = d1.id; cleanup.push(() => api.deleteDocument(docPublishedId)) }
+  if (d1?.id) {
+    docPublishedId = d1.id
+    cleanup.push(() => api.deleteDocument(docPublishedId))
+    // 更新一次內容，產生 v2 版本（讓版本歷史 Diff 截圖有意義）
+    await (api as any).ctx.post(`/api/docDocuments:update?filterByTk=${docPublishedId}`, {
+      data: {
+        content: CONTENT_API_DOC + '\n\n## v2 更新（2026-04-16）\n\n- 新增 wez-notification-starter 章節\n- 修正 wez-security-starter Token 刷新競態條件\n- 補充 wez-datasource-starter 多資料源切換說明\n',
+      }
+    }).catch(() => null)
+  }
 
   // 2. 架構文件（已發布）
   await api.createDocument({
@@ -356,7 +366,7 @@ test.beforeAll(async () => {
     projectId: proj1Id || undefined,
     categoryId: cat12Id || undefined,
     status: 'published',
-    githubRepo: 'wezoomtek/wez-spring-boot-starters',
+    githubRepo: '10.1.2.191/wezoomtek/wez-spring-boot-starters',
     githubFilePath: 'docs/architecture.md',
     githubBranch: 'main',
   } as any).then(d => {
@@ -444,6 +454,44 @@ test.beforeAll(async () => {
     if (d?.id) cleanup.push(() => api.deleteDocument(d.id))
   }).catch(() => null)
 
+  // 建立截圖用的範本定義（透過 ApiHelper token 呼叫 API）
+  try {
+    const tplFields = [
+      { id: 'f1', name: 'applicant', type: 'text', label: '申請人姓名', required: true, placeholder: '請填寫申請人全名' },
+      { id: 'f2', name: 'applyDate', type: 'date', label: '申請日期', required: true },
+      { id: 'f3', name: 'applyType', type: 'select', label: '申請類型', required: true,
+        options: [
+          { label: '請假單', value: '請假單' },
+          { label: '報銷申請', value: '報銷申請' },
+          { label: '採購申請', value: '採購申請' },
+          { label: '其他', value: '其他' },
+        ]
+      },
+      { id: 'f4', name: 'reason', type: 'text', label: '申請原因說明', required: false, placeholder: '請詳述申請原因（選填）' },
+    ]
+    const { getToken, ADMIN_CREDENTIALS } = await import('../fixtures/auth')
+    const token = await getToken(ADMIN_CREDENTIALS)
+    const tplRes = await fetch(`${BASE_URL}/api/docTemplates:create`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '[TOUR] 通用申請表單範本', description: '截圖展示用範本', fields: tplFields, projectId: proj1Id || undefined }),
+    })
+    const tplBody = await tplRes.json().catch(() => ({}))
+    const tplId = tplBody?.data?.id
+    if (tplId) {
+      demoTemplateId = tplId
+      cleanup.push(async () => {
+        const t2 = await getToken(ADMIN_CREDENTIALS)
+        await fetch(`${BASE_URL}/api/docTemplates:destroy?filterByTk=${tplId}`, {
+          method: 'POST', headers: { 'Authorization': `Bearer ${t2}` },
+        }).catch(() => {})
+      })
+      console.log(`  demoTemplateId=${demoTemplateId}`)
+    }
+  } catch (e) {
+    console.log('  ⚠️ 建立範本定義失敗:', e)
+  }
+
   console.log('✅ Demo 資料建立完成')
   console.log(`  proj1=${proj1Id}, proj2=${proj2Id}, proj3=${proj3Id}`)
   console.log(`  docPublishedId=${docPublishedId}, docLockedId=${docLockedId}`)
@@ -475,32 +523,104 @@ test('DocHub 全功能截圖導覽 v4', async ({ page }) => {
 
   // ── 02. 列表搜尋 ──────────────────────────────────────────────────────────
   console.log('\n── 02 搜尋 ──')
-  const searchInput = page.locator('.dochub-search-input')
+  const searchInput = page.locator('.dochub-search-input, input[placeholder*="搜尋"], input[class*="search"]').first()
   if (await searchInput.isVisible({ timeout: 3000 }).catch(() => false)) {
     await searchInput.fill('starter')
-    await page.waitForTimeout(1200)
+    await page.waitForTimeout(2000) // 等搜尋結果出現
+    await waitReady(page, 500)
     await shot(page, '02_列表搜尋')
+    await shot(page, '02_列表搜尋結果')
     await searchInput.clear()
-    await page.waitForTimeout(600)
+    await page.waitForTimeout(800)
+  } else {
+    // 嘗試用 Cmd+K 聚焦
+    await page.keyboard.press('Meta+k')
+    await page.waitForTimeout(500)
+    const si2 = page.locator('input').filter({ hasText: /搜尋/ }).first()
+    if (await si2.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await si2.fill('starter')
+      await page.waitForTimeout(2000)
+      await shot(page, '02_列表搜尋')
+      await shot(page, '02_列表搜尋結果')
+    }
   }
 
-  // ── 03. 新增文件 Modal ────────────────────────────────────────────────────
+  // ── 03. 新增文件 Modal（三種建立方式）────────────────────────────────────
   console.log('\n── 03 新增文件 Modal ──')
-  // 找「新增文件」按鈕（需在 cat 層才顯示）
+  // 需在 cat 層才顯示「+新增文件」按鈕
+  await page.goto(`${BASE_URL}/admin/doc-hub?projectId=${proj1Id}&categoryId=${cat11Id}`, { timeout: 60000 })
+  await page.waitForSelector('tr.ant-table-row, .ant-empty', { timeout: 15000 }).catch(() => {})
+  await waitReady(page, 1500)
   const addDocBtn = page.locator('button').filter({ hasText: /新增文件/ }).first()
   if (await addDocBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
     await addDocBtn.click()
-    await page.waitForTimeout(1000)
-    await shot(page, '03_新增文件Modal')
-    // 截「從範本建立」選項
-    const tplOpt = page.locator('text=從範本建立').first()
-    if (await tplOpt.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await tplOpt.click()
-      await page.waitForTimeout(800)
-      await shot(page, '03b_選擇範本Modal')
+    await page.waitForSelector('.ant-modal-content', { timeout: 8000 }).catch(() => {})
+    await page.waitForTimeout(800)
+    // 02a：三種建立方式選擇畫面
+    await shot(page, '02a_新增Modal_三種方式')
+
+    // 02b：點「自由撰寫」進入空白編輯頁
+    const freeWriteOpt = page.locator('.ant-modal-content').locator('text=自由撰寫').first()
+    if (await freeWriteOpt.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await freeWriteOpt.click()
+      await page.waitForSelector('textarea', { timeout: 20000 }).catch(() => {})
+      await waitReady(page, 2000)
+      await shot(page, '02b_新增文件_自由撰寫_空白編輯頁')
+      await page.goto(`${BASE_URL}/admin/doc-hub?projectId=${proj1Id}&categoryId=${cat11Id}`, { timeout: 60000 })
+      await waitReady(page, 1500)
     }
-    await page.keyboard.press('Escape')
-    await page.waitForTimeout(500)
+
+    // 重新開 Modal 截「使用範本」
+    const addDocBtn2 = page.locator('button').filter({ hasText: /新增文件/ }).first()
+    if (await addDocBtn2.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await addDocBtn2.click()
+      await page.waitForSelector('.ant-modal-content', { timeout: 8000 }).catch(() => {})
+      await page.waitForTimeout(600)
+      // 02c：點「使用範本」進入選範本 Modal
+      const tplOpt = page.locator('.ant-modal-content').locator('text=使用範本').first()
+      if (await tplOpt.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await tplOpt.click()
+        await page.waitForTimeout(800)
+        await shot(page, '02c_新增文件_使用範本_選範本')
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(400)
+      } else {
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(400)
+      }
+    }
+
+    // 重新開 Modal 截「Git 同步」
+    const addDocBtn3 = page.locator('button').filter({ hasText: /新增文件/ }).first()
+    if (await addDocBtn3.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await addDocBtn3.click()
+      await page.waitForSelector('.ant-modal-content', { timeout: 8000 }).catch(() => {})
+      await page.waitForTimeout(600)
+      // 02d：點「Git 同步」進入 Git 設定的編輯頁
+      const gitOpt = page.locator('.ant-modal-content').locator('text=Git 同步').first()
+      if (await gitOpt.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await gitOpt.click()
+        await page.waitForSelector('textarea', { timeout: 20000 }).catch(() => {})
+        await waitReady(page, 2000)
+        await shot(page, '02d_新增文件_Git同步_填倉庫資訊')
+        await page.goto(`${BASE_URL}/admin/doc-hub?projectId=${proj1Id}&categoryId=${cat11Id}`, { timeout: 60000 })
+        await waitReady(page, 1500)
+      } else {
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(400)
+      }
+    }
+
+    // 也補一張 03_新增文件Modal（與 02a 相同，保持向後相容）
+    const addDocBtn4 = page.locator('button').filter({ hasText: /新增文件/ }).first()
+    if (await addDocBtn4.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await addDocBtn4.click()
+      await page.waitForSelector('.ant-modal-content', { timeout: 8000 }).catch(() => {})
+      await page.waitForTimeout(600)
+      await shot(page, '03_新增文件Modal')
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(400)
+    }
   }
 
   // ── 04. 編輯頁 ───────────────────────────────────────────────────────────
@@ -535,8 +655,15 @@ test('DocHub 全功能截圖導覽 v4', async ({ page }) => {
   await waitReady(page, 2500)
   await shot(page, '05_閱讀頁')
 
-  await page.evaluate(() => window.scrollTo({ top: 400, behavior: 'smooth' }))
-  await page.waitForTimeout(800)
+  // 捲動內部容器讓進度條出現（NocoBase 使用 overflow 容器而非 window）
+  await page.evaluate(() => {
+    var scrollable = Array.from(document.querySelectorAll('*')).find(function(el) {
+      var s = window.getComputedStyle(el)
+      return (s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 50
+    })
+    if (scrollable) { scrollable.scrollTop = 300 } else { window.scrollTo({ top: 400 }) }
+  })
+  await page.waitForTimeout(1200)
   await shot(page, '05b_閱讀頁_進度條')
 
   await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }))
@@ -671,23 +798,18 @@ test('DocHub 全功能截圖導覽 v4', async ({ page }) => {
   console.log('\n── 11 稽核日誌 ──')
   await page.goto(proj1Id ? `${BASE_URL}/admin/doc-hub?projectId=${proj1Id}` : `${BASE_URL}/admin/doc-hub`, { timeout: 60000 })
   await waitReady(page, 1500)
-  // 側邊欄底部稽核日誌
-  const auditBtn = page.locator('button, [role="button"]').filter({ hasText: /稽核|Audit/ }).first()
-  if (await auditBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await auditBtn.click()
-    await page.waitForTimeout(1200)
+  // 側邊欄底部的稽核日誌連結（div[title="稽核日誌"] 或含文字的 div）
+  const auditLink = page.locator('[title="稽核日誌"], div').filter({ hasText: /^稽核日誌$/ }).last()
+  if (await auditLink.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await auditLink.click()
+    await page.waitForSelector('.ant-modal-content, .ant-table-row', { timeout: 8000 }).catch(() => {})
+    await waitReady(page, 1500)
     await shot(page, '11_稽核日誌')
     await page.keyboard.press('Escape')
-    await page.waitForTimeout(400)
+    await page.waitForTimeout(500)
   } else {
-    // 嘗試側邊欄的文字連結
-    const sideAudit = page.locator('div, span').filter({ hasText: /稽核日誌/ }).last()
-    if (await sideAudit.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await sideAudit.click()
-      await page.waitForTimeout(1200)
-      await shot(page, '11_稽核日誌')
-      await page.keyboard.press('Escape')
-    }
+    console.log('  ⚠️ 找不到稽核日誌連結，截目前畫面')
+    await shot(page, '11_稽核日誌')
   }
 
   // ── 12. 範本管理頁 ────────────────────────────────────────────────────────
@@ -717,38 +839,103 @@ test('DocHub 全功能截圖導覽 v4', async ({ page }) => {
 
   // ── 14. 填寫範本頁 ────────────────────────────────────────────────────────
   console.log('\n── 14 填寫範本頁 ──')
-  // 先到列表，找「從範本建立」的文件，或直接用 URL
-  if (docPublishedId) {
-    await page.goto(`${BASE_URL}/admin/doc-hub/view/${docPublishedId}`, { timeout: 60000 })
-    await waitReady(page, 1500)
+  // 用 beforeAll 建立的 demoTemplateId 帶入 URL
+  if (demoTemplateId) {
+    const qs = `templateId=${demoTemplateId}&projectId=${proj1Id || ''}&categoryId=${cat11Id || ''}`
+    await page.goto(`${BASE_URL}/admin/doc-hub/template-fill/new?${qs}`, { timeout: 60000 })
+    await page.waitForSelector('input, .ant-form-item, h2', { timeout: 20000 }).catch(() => {})
+    await waitReady(page, 2000)
+    // 填入示範資料讓截圖更豐富
+    const nameInput = page.locator('input').first()
+    if (await nameInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await nameInput.fill('陳大明')
+    }
+    await page.waitForTimeout(500)
+  } else {
+    await page.goto(`${BASE_URL}/admin/doc-hub/template-fill/new?projectId=${proj1Id || ''}`, { timeout: 60000 })
+    await waitReady(page, 2000)
   }
-  // 嘗試進入 template-fill/new
-  await page.goto(`${BASE_URL}/admin/doc-hub/template-fill/new?projectId=${proj1Id || ''}&categoryId=${cat11Id || ''}`, { timeout: 60000 })
-  await page.waitForSelector('input, button, h2, [class*="form"]', { timeout: 15000 }).catch(() => {})
-  await waitReady(page, 2000)
   await shot(page, '14_填寫範本頁')
 
   // ── 15. 專案權限 Modal ────────────────────────────────────────────────────
   console.log('\n── 15 專案權限 Modal ──')
+  // 進入專案頁面（不選資料夾，這樣 InfoBar 顯示專案層按鈕）
   await page.goto(proj1Id ? `${BASE_URL}/admin/doc-hub?projectId=${proj1Id}` : `${BASE_URL}/admin/doc-hub`, { timeout: 60000 })
-  await waitReady(page, 1500)
-  // 找 🔐 按鈕
-  const permBtn = page.locator('span, button, div').filter({ hasText: '🔐' }).first()
+  await page.waitForSelector('tr.ant-table-row, .ant-empty', { timeout: 15000 }).catch(() => {})
+  await waitReady(page, 2000)
+  // InfoBar 的「權限」按鈕（文字是「權限」，有 LockOutlined icon）
+  const permBtn = page.locator('button').filter({ hasText: /^權限$/ }).first()
   if (await permBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
     await permBtn.click()
-    await page.waitForTimeout(1200)
-    await shot(page, '15_專案權限Modal')
+    const modalVisible = await page.locator('.ant-modal-content').waitFor({ state: 'visible', timeout: 8000 }).then(() => true).catch(() => false)
+    console.log(`  專案權限 Modal 出現: ${modalVisible}`)
+    if (modalVisible) {
+      await waitReady(page, 800)
+      await shot(page, '15_專案權限Modal')
+    } else {
+      console.log('  ⚠️ Modal 未出現，截目前畫面')
+      await shot(page, '15_專案權限Modal')
+    }
     await page.keyboard.press('Escape')
     await page.waitForTimeout(400)
   } else {
-    // sidebar 中找
-    const sidePermBtns = page.locator('[title*="權限"], button[title*="permission"]')
-    if (await sidePermBtns.first().isVisible({ timeout: 2000 }).catch(() => false)) {
-      await sidePermBtns.first().click()
-      await page.waitForTimeout(1200)
-      await shot(page, '15_專案權限Modal')
+    console.log('  ⚠️ 找不到「權限」按鈕，截目前畫面')
+    await shot(page, '15_專案權限Modal')
+  }
+
+  // ── 15b. 資料夾權限 Modal ─────────────────────────────────────────────────
+  console.log('\n── 15b 資料夾權限 Modal ──')
+  // 策略：用 ?projectId=xxx&categoryId=yyy URL 讓頁面初始化時就有 activeCatId
+  // 這樣就不需要點 sidebar，避免 React state 更新時機問題
+  const catPermUrl = (proj1Id && cat11Id)
+    ? `${BASE_URL}/admin/doc-hub?projectId=${proj1Id}&categoryId=${cat11Id}`
+    : proj1Id
+      ? `${BASE_URL}/admin/doc-hub?projectId=${proj1Id}`
+      : `${BASE_URL}/admin/doc-hub`
+  console.log(`  URL: ${catPermUrl}`)
+  await page.goto(catPermUrl, { timeout: 60000 })
+  // 等資料載入完成：activeCatId 存在時「新增文件」按鈕是可點擊的（不是 disabled）
+  await page.waitForFunction(() => {
+    const btns = Array.from(document.querySelectorAll('button'))
+    const newDocBtn = btns.find(b => b.textContent?.includes('新增文件'))
+    return newDocBtn && !newDocBtn.disabled
+  }, { timeout: 15000 }).catch(() => {})
+  await waitReady(page, 1500)
+
+  // 列出所有 button 文字，幫助 debug
+  const allBtnTexts = await page.locator('button').evaluateAll((btns: HTMLButtonElement[]) =>
+    btns.map(b => b.textContent?.trim()).filter(Boolean)
+  )
+  console.log(`  按鈕清單: ${allBtnTexts.slice(0, 10).join(' | ')}`)
+
+  // 找「權限」按鈕（資料夾層）
+  const catPermBtn = page.locator('button').filter({ hasText: /^權限$/ }).first()
+  if (await catPermBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await catPermBtn.click()
+    const modalVisible = await page.locator('.ant-modal-content').waitFor({ state: 'visible', timeout: 8000 }).then(() => true).catch(() => false)
+    const modalTitle = await page.locator('.ant-modal-title, .ant-modal-content').first().textContent().catch(() => '')
+    console.log(`  Modal 出現: ${modalVisible}, 標題: "${modalTitle?.substring(0, 50)}"`)
+    if (modalVisible) {
+      await waitReady(page, 800)
+      await shot(page, '15b_資料夾權限Modal_繼承模式')
+      // 切換到自訂模式（第二個 radio）
+      const radios = page.locator('.ant-modal-content input[type="radio"]')
+      const radioCount = await radios.count()
+      console.log(`  radio 數量: ${radioCount}`)
+      if (radioCount >= 2) {
+        await radios.nth(1).click()
+        await page.waitForTimeout(800)
+        await shot(page, '15c_資料夾權限Modal_自訂模式')
+      }
       await page.keyboard.press('Escape')
+      await page.waitForTimeout(400)
+    } else {
+      console.log('  ⚠️ Modal 未出現')
+      await shot(page, '15b_資料夾權限Modal_繼承模式')
     }
+  } else {
+    console.log('  ⚠️ 找不到「權限」按鈕，按鈕清單：', allBtnTexts)
+    await shot(page, '15b_資料夾權限Modal_繼承模式')
   }
 
   // ── 16. Git 同步欄展示 ────────────────────────────────────────────────────

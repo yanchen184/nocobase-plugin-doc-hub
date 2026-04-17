@@ -183,7 +183,7 @@ test.beforeAll(async () => {
     title: 'Spring Boot Starter 整合指南（Git 同步 Demo）',
     content: '# 初始內容\n\n尚未從 Git 拉取。',
     status: 'published',
-    githubRepo: `wezoomtek/wez-spring-boot-starters`,
+    githubRepo: `10.1.2.191/wezoomtek/wez-spring-boot-starters`,
     githubFilePath: TEST_FILE_PATH,
     githubBranch: GITLAB_BRANCH,
   } as any).catch(e => { console.log('createDocument error:', e); return null })

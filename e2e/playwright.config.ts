@@ -6,6 +6,7 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: 1,
+  timeout: 300000, // 5 min per test + beforeAll/afterAll hooks
   reporter: [
     ['list'],
     ['html', { outputFolder: 'artifacts/playwright-report', open: 'never' }],

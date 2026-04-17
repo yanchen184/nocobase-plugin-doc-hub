@@ -4,6 +4,7 @@ module.exports = (0, import_database.defineCollection)({
   fields: [
     { type: 'belongsTo', name: 'document', target: 'docDocuments', foreignKey: 'documentId' },
     { type: 'text', name: 'content' },
+    { type: 'text', name: 'diffPatch' },
     { type: 'string', name: 'changeSummary' },
     { type: 'integer', name: 'versionNumber' },
     { type: 'string', name: 'gitSha' },

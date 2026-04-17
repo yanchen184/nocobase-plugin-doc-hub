@@ -2,6 +2,34 @@ var import_server = require("@nocobase/server");
 var import_syncToGit = require("./actions/syncToGit");
 var import_syncProjectToGit = require("./actions/syncProjectToGit");
 
+// Server-side line diff：回傳 unified diff patch 字串
+// 格式：每行前綴 "+" 新增、"-" 刪除、" " 不變
+function computeLineDiffPatch(oldText, newText) {
+  const oldLines = (oldText || '').split('\n');
+  const newLines = (newText || '').split('\n');
+  const m = oldLines.length, n = newLines.length;
+  // LCS dp
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = oldLines[i-1] === newLines[j-1] ? dp[i-1][j-1] + 1 : Math.max(dp[i-1][j], dp[i][j-1]);
+    }
+  }
+  // backtrack
+  const result = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i-1] === newLines[j-1]) {
+      result.push(' ' + oldLines[i-1]); i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+      result.push('+' + newLines[j-1]); j--;
+    } else {
+      result.push('-' + oldLines[i-1]); i--;
+    }
+  }
+  return result.reverse().join('\n');
+}
+
 class PluginDocHubServer extends import_server.Plugin {
   async beforeLoad() {
     this.logger = this.createLogger({ dirname: 'doc-hub', filename: '%DATE%.log' });
@@ -55,6 +83,8 @@ class PluginDocHubServer extends import_server.Plugin {
     async function notifyGitSyncFailed(db, docId, docTitle, errorMsg) {
       try {
         const docRepo = db.getRepository('docDocuments');
+        // 更新 gitSyncStatus 為 'failed'
+        await docRepo.update({ filterByTk: docId, values: { gitSyncStatus: 'failed', gitSyncedAt: new Date() } }).catch(() => {});
         const doc = await docRepo.findOne({ filterByTk: docId, appends: ['subscribers'] });
         if (!doc) return;
         const recipientIds = new Set();
@@ -542,6 +572,7 @@ class PluginDocHubServer extends import_server.Plugin {
           templateName: tpl ? tpl.name : '',
           templateVersion: 1,
           data: values.formData,
+          fields: tpl ? (tpl.fields || []) : [], // 快照欄位定義，避免範本更新後舊文件渲染損壞
         });
       }
       const doc = await repo.create({ values: { ...docFields, title, categoryId, projectId, authorId: ctx.state?.currentUser?.id, lastEditorId: ctx.state?.currentUser?.id } });
@@ -618,8 +649,8 @@ class PluginDocHubServer extends import_server.Plugin {
         }
       }
 
-      // 更新文件本體欄位（不含 m2m）
-      await repo.update({ filterByTk, values: { ...docFields, lastEditorId: ctx.state?.currentUser?.id } });
+      // 更新文件本體欄位（不含 m2m）— 傳入 context 讓 afterUpdate hook 能取得 currentUser
+      await repo.update({ filterByTk, values: { ...docFields, lastEditorId: ctx.state?.currentUser?.id }, context: ctx });
 
       // 更新 m2m 關聯（有傳才更新）
       if (Array.isArray(viewerIds)) {
@@ -680,7 +711,7 @@ class PluginDocHubServer extends import_server.Plugin {
       }
       try {
         const content = Buffer.from(ghFile.content, 'base64').toString('utf8');
-        await repo.update({ filterByTk, values: { content, gitSha: ghFile.sha, gitSyncedAt: new Date(), gitSyncStatus: 'synced' } });
+        await repo.update({ filterByTk, values: { content, gitSha: ghFile.sha, gitSyncedAt: new Date(), gitSyncStatus: 'synced' }, context: ctx });
         const updated = await repo.findOne({ filterByTk, appends: ['viewers', 'editors', 'subscribers', 'type', 'lastEditor'] });
         ctx.body = updated;
         this.logger.info(`[DocHub] pullFromGit: doc ${filterByTk} pulled sha=${ghFile.sha}`);
@@ -739,7 +770,8 @@ class PluginDocHubServer extends import_server.Plugin {
             const crypto = require('crypto');
             const rawBody = JSON.stringify(ctx.request.body || {});
             const expected = 'sha256=' + crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
-            authorized = crypto.timingSafeEqual(Buffer.from(githubSig), Buffer.from(expected));
+            const a = Buffer.from(githubSig); const b = Buffer.from(expected);
+            authorized = a.length === b.length && crypto.timingSafeEqual(a, b);
           } catch(e) { authorized = false; }
         }
         if (!authorized) {
@@ -802,8 +834,9 @@ class PluginDocHubServer extends import_server.Plugin {
           try {
             // branch 比對：用文件本身的 githubBranch（預設 master）
             const expectedBranch = docModel.githubBranch || 'master';
-            if (branch && branch !== expectedBranch) {
-              this.logger.info(`[DocHub] webhook: skip doc ${docModel.id}, branch mismatch (got ${branch}, expect ${expectedBranch})`);
+            // branch 為空字串時也視為不符，避免任意分支觸發同步
+            if (!branch || branch !== expectedBranch) {
+              this.logger.info(`[DocHub] webhook: skip doc ${docModel.id}, branch mismatch (got '${branch}', expect '${expectedBranch}')`);
               continue;
             }
 
@@ -1194,6 +1227,7 @@ class PluginDocHubServer extends import_server.Plugin {
       const rows = await repo.find({ filter, sort: ['sort', 'createdAt'] });
       ctx.body = rows;
       ctx.meta = { count: rows.length };
+      await next();
     });
 
     this.app.resourceManager.registerActionHandler('docTemplates:get', async (ctx, next) => {
@@ -1204,6 +1238,7 @@ class PluginDocHubServer extends import_server.Plugin {
       const row = await repo.findOne({ filterByTk: id });
       if (!row) { ctx.throw(404, 'Template not found'); return; }
       ctx.body = row;
+      await next();
     });
 
     this.app.resourceManager.registerActionHandler('docTemplates:create', async (ctx, next) => {
@@ -1233,6 +1268,7 @@ class PluginDocHubServer extends import_server.Plugin {
       });
       await writeAuditLog({ action: 'template_create', resourceType: 'docTemplates', resourceId: tpl.id, resourceTitle: name, user: currentUser, detail: { fields: (body.fields || []).length } });
       ctx.body = tpl;
+      await next();
     });
 
     this.app.resourceManager.registerActionHandler('docTemplates:update', async (ctx, next) => {
@@ -1256,6 +1292,7 @@ class PluginDocHubServer extends import_server.Plugin {
       const updated = await repo.update({ filterByTk: id, values: updates });
       await writeAuditLog({ action: 'template_update', resourceType: 'docTemplates', resourceId: id, resourceTitle: updates.name || existing.name, user: currentUser });
       ctx.body = updated;
+      await next();
     });
 
     this.app.resourceManager.registerActionHandler('docTemplates:destroy', async (ctx, next) => {
@@ -1270,6 +1307,7 @@ class PluginDocHubServer extends import_server.Plugin {
       await repo.update({ filterByTk: id, values: { status: 'archived', updatedAt: new Date() } });
       await writeAuditLog({ action: 'template_delete', resourceType: 'docTemplates', resourceId: id, resourceTitle: existing.name, user: currentUser });
       ctx.body = { ok: true };
+      await next();
     });
 
     this.app.acl.registerSnippet({
@@ -1280,7 +1318,31 @@ class PluginDocHubServer extends import_server.Plugin {
     // 注意：public ACL 不會 inject currentUser，handler 需要自行從 ctx.auth.user 或 token 取得
     // 用 public 讓所有角色（包含 member）都能通過 ACL，handler 自己負責權限過濾
     // public ACL 不會 inject currentUser，由 getCurrentUser() helper 手動從 auth 取得
-    this.app.acl.allow('docDocuments', ['syncToGit', 'search', 'list', 'update', 'get', 'create', 'pullFromGit', 'fetchFromGit', 'destroy', 'reorder', 'webhookReceive', 'count', 'updateSummary', 'uploadImage', 'lock', 'unlock'], 'public');
+    // DocHub 通知查詢端點 — 掛在 docDocuments resource 下作為自定義 action
+    // GET /api/docDocuments:myNotifications — 回傳當前 user 的 doc-hub channel 通知
+    this.app.resourceManager.registerActionHandler('docDocuments:myNotifications', async (ctx, next) => {
+      const currentUser = await getCurrentUser(ctx);
+      if (!currentUser) { ctx.throw(401, '請先登入'); return; }
+      const params = ctx.action?.params || {};
+      const pageSize = Math.min(parseInt(String(params.pageSize || '20')), 200);
+      const page = parseInt(String(params.page || '1'));
+      try {
+        const msgRepo = ctx.db.getRepository('notificationInAppMessages');
+        const { count, rows } = await msgRepo.model.findAndCountAll({
+          where: { userId: currentUser.id, channelName: 'doc-hub' },
+          order: [['receiveTimestamp', 'DESC']],
+          limit: pageSize,
+          offset: (page - 1) * pageSize,
+        });
+        ctx.body = rows.map(r => r.toJSON());
+        ctx.meta = { count, page, pageSize, totalPage: Math.ceil(count / pageSize) };
+      } catch(e) {
+        ctx.throw(500, e.message);
+      }
+      await next();
+    });
+
+    this.app.acl.allow('docDocuments', ['syncToGit', 'search', 'list', 'update', 'get', 'create', 'pullFromGit', 'fetchFromGit', 'destroy', 'reorder', 'webhookReceive', 'count', 'updateSummary', 'uploadImage', 'lock', 'unlock', 'myNotifications'], 'public');
     this.app.acl.allow('docAuditLogs', ['list'], 'public');
     this.app.acl.allow('docProjects', ['list', 'get', 'create', 'update', 'destroy', 'syncToGit', 'getPermissions', 'setPermissions'], 'public');
     this.app.acl.allow('docGroups', ['list', 'get', 'create', 'update', 'destroy'], 'public');
@@ -1460,7 +1522,7 @@ class PluginDocHubServer extends import_server.Plugin {
           if (content !== null) {
             await this.db.getRepository('docDocuments').update({
               filterByTk: model.id,
-              values: { content, gitSha: sha, gitSyncStatus: 'synced', gitLastSyncAt: new Date() },
+              values: { content, gitSha: sha, gitSyncStatus: 'synced', gitSyncedAt: new Date() },
             });
             // 建立 v1（用拉取的內容）
             try {
@@ -1470,9 +1532,15 @@ class PluginDocHubServer extends import_server.Plugin {
             return;
           } else {
             this.logger.warn('afterCreate auto-pull: git returned error: ' + (ghFile?.message || 'unknown'));
+            await this.db.getRepository('docDocuments').update({
+              filterByTk: model.id, values: { gitSyncStatus: 'failed', gitSyncedAt: new Date() }
+            }).catch(() => {});
           }
         } catch (err) {
           this.logger.warn('afterCreate auto-pull failed: ' + err.message);
+          await this.db.getRepository('docDocuments').update({
+            filterByTk: model.id, values: { gitSyncStatus: 'failed', gitSyncedAt: new Date() }
+          }).catch(() => {});
         }
       }
 
@@ -1506,7 +1574,17 @@ class PluginDocHubServer extends import_server.Plugin {
         const latest = await vRepo.findOne({ filter: { documentId: model.id }, sort: ['-versionNumber'] });
         const next = (latest?.versionNumber || 0) + 1;
         const changeSummary = (userSummary && userSummary.trim()) ? userSummary.trim() : 'v' + next;
-        await vRepo.create({ values: { documentId: model.id, content: model.content, changeSummary, versionNumber: next, editorId: currentUser?.id } });
+        // v1 存完整 content 作為基底；之後只存 diffPatch
+        const isFirst = next === 1;
+        const diffPatch = isFirst ? null : computeLineDiffPatch(latest?.content || '', model.content || '');
+        await vRepo.create({ values: {
+          documentId: model.id,
+          content: isFirst ? model.content : null,
+          diffPatch,
+          changeSummary,
+          versionNumber: next,
+          editorId: currentUser?.id,
+        }});
       } catch (err) { this.logger.error('version create failed: ' + err.message); }
 
       // 訂閱者站內信通知

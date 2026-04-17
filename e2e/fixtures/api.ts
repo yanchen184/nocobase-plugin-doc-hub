@@ -17,6 +17,7 @@ export class ApiHelper {
     const ctx = await request.newContext({
       baseURL: BASE_URL,
       extraHTTPHeaders: { Authorization: `Bearer ${token}` },
+      timeout: 60000,
     })
     return new ApiHelper(ctx, token)
   }
@@ -69,6 +70,7 @@ export class ApiHelper {
     title: string
     content?: string
     categoryId?: number
+    projectId?: number
     typeId?: number
     status?: string
   }): Promise<any> {
@@ -89,6 +91,71 @@ export class ApiHelper {
     const res = await this.ctx.get(`/api/docDocuments?${qs}`)
     const body = await res.json()
     return body.data || []
+  }
+
+  // ── Users ─────────────────────────────────────────────────────────────────
+
+  async createUser(data: { email: string; nickname?: string; password?: string }): Promise<any> {
+    const res = await this.ctx.post('/api/users', {
+      data: {
+        username: data.email,
+        email: data.email,
+        nickname: data.nickname || data.email.split('@')[0],
+        password: data.password || 'Test1234!',
+      },
+    })
+    if (!res.ok()) throw new Error(`createUser failed: ${res.status()} ${await res.text()}`)
+    const body = await res.json()
+    return body.data
+  }
+
+  async deleteUser(id: number): Promise<void> {
+    await this.ctx.delete(`/api/users/${id}`)
+  }
+
+  async getUserByEmail(email: string): Promise<any> {
+    const encoded = encodeURIComponent(JSON.stringify({ email }))
+    const res = await this.ctx.get(`/api/users?filter=${encoded}&pageSize=1`)
+    if (!res.ok()) return null
+    const body = await res.json()
+    // NocoBase users list returns { data: [...], meta: {...} }
+    const rows = Array.isArray(body.data) ? body.data : (body.data?.data || [])
+    return rows[0] || null
+  }
+
+  // ── Project Permissions ───────────────────────────────────────────────────
+
+  async setProjectPermissions(projectId: number, data: {
+    viewerIds?: number[]
+    editorIds?: number[]
+    subscriberIds?: number[]
+  }): Promise<void> {
+    const res = await this.ctx.post(`/api/docProjects:setPermissions?filterByTk=${projectId}`, { data })
+    if (!res.ok()) throw new Error(`setProjectPermissions failed: ${await res.text()}`)
+  }
+
+  // ── Document Permissions ──────────────────────────────────────────────────
+
+  async setDocumentSubscribers(docId: number, subscriberIds: number[]): Promise<void> {
+    const res = await this.ctx.post(`/api/docDocuments:update?filterByTk=${docId}`, {
+      data: { subscriberIds },
+    })
+    if (!res.ok()) throw new Error(`setDocumentSubscribers failed: ${await res.text()}`)
+  }
+
+  // ── Notifications ─────────────────────────────────────────────────────────
+
+  async listNotifications(params: Record<string, string | number> = {}): Promise<any[]> {
+    const qs = new URLSearchParams({
+      pageSize: '50',
+      ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])),
+    })
+    // Use DocHub's own notification endpoint (docNotifications:list)
+    // which filters by current user and doc-hub channel
+    const res = await this.ctx.get(`/api/docDocuments:myNotifications?${qs}`)
+    if (!res.ok()) return []
+    const body = await res.json()
+    return Array.isArray(body.data) ? body.data : (body.data?.data || [])
   }
 
   // ── Lock / Unlock ─────────────────────────────────────────────────────────

@@ -17,13 +17,19 @@ export const MEMBER_CREDENTIALS: UserCredentials = {
   password: process.env.MEMBER_PASSWORD || 'member123',
 }
 
+export const MEMBER_B_CREDENTIALS: UserCredentials = {
+  account: process.env.MEMBER_B_ACCOUNT || 'memberb@test.com',
+  password: process.env.MEMBER_B_PASSWORD || 'memberb123',
+}
+
 /**
  * Get auth token via API (no browser needed)
  */
 export async function getToken(credentials: UserCredentials): Promise<string> {
-  const ctx = await request.newContext({ baseURL: BASE_URL })
+  const ctx = await request.newContext({ baseURL: BASE_URL, timeout: 60000 })
   const res = await ctx.post('/api/auth:signIn', {
     data: { account: credentials.account, password: credentials.password },
+    timeout: 60000,
   })
   if (!res.ok()) {
     throw new Error(`Login failed: ${res.status()} ${await res.text()}`)
@@ -60,6 +66,10 @@ export async function loginAsAdmin(page: Page): Promise<void> {
 
 export async function loginAsMember(page: Page): Promise<void> {
   return loginAs(page, MEMBER_CREDENTIALS)
+}
+
+export async function loginAsMemberB(page: Page): Promise<void> {
+  return loginAs(page, MEMBER_B_CREDENTIALS)
 }
 
 export async function logout(page: Page): Promise<void> {

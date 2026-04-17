@@ -78,11 +78,11 @@ docker-compose restart app
 
 | 變數 | 必填 | 說明 |
 |------|------|------|
-| `APP_KEY` | ✅ | JWT 簽名金鑰，建議 `openssl rand -hex 32` |
+| `APP_KEY` | ✅ | NocoBase JWT 簽名金鑰（用於登入 token），建議 `openssl rand -hex 32` 產生 |
 | `DB_PASSWORD` | ✅ | PostgreSQL 密碼 |
 | `DOCHUB_GITLAB_HOST` | Git 同步時 | GitLab 主機（IP 或 domain） |
 | `DOCHUB_GITLAB_TOKEN` | Git 同步時 | GitLab Personal Access Token |
-| `DOCHUB_GITHUB_TOKEN` | Git 同步時 | GitHub Personal Access Token |
+| `DOCHUB_GITHUB_TOKEN` | Git 同步時 | GitHub.com Personal Access Token（文件綁定 github.com repo 時使用） |
 
 ```env
 APP_KEY=your-random-secret-key-change-me
