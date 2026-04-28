@@ -6,10 +6,12 @@ const BASE_URL = process.env.BASE_URL || 'http://localhost:13000'
 export class ApiHelper {
   private ctx: APIRequestContext
   private token: string
+  public accountLabel: string // 供除錯辨識用
 
-  constructor(ctx: APIRequestContext, token: string) {
+  constructor(ctx: APIRequestContext, token: string, accountLabel = 'unknown') {
     this.ctx = ctx
     this.token = token
+    this.accountLabel = accountLabel
   }
 
   static async create(credentials: UserCredentials = ADMIN_CREDENTIALS): Promise<ApiHelper> {
@@ -19,16 +21,49 @@ export class ApiHelper {
       extraHTTPHeaders: { Authorization: `Bearer ${token}` },
       timeout: 60000,
     })
-    return new ApiHelper(ctx, token)
+    return new ApiHelper(ctx, token, credentials.account)
+  }
+
+  /** 直接存取底層 APIRequestContext（供特殊 payload 用） */
+  get raw(): APIRequestContext {
+    return this.ctx
+  }
+
+  /** 取得目前登入使用者的資訊（id / email / nickname） */
+  async whoami(): Promise<any> {
+    const res = await this.ctx.get('/api/auth:check')
+    if (!res.ok()) return null
+    const body = await res.json()
+    return body.data || null
   }
 
   async dispose(): Promise<void> {
     await this.ctx.dispose()
   }
 
+  // ── Groups ────────────────────────────────────────────────────────────────
+
+  /** 建立 Group（docGroups:create 吃扁平 body，不是 {data} 包裹） */
+  async createGroup(data: { name: string; description?: string; order?: number }): Promise<any> {
+    const res = await this.ctx.post('/api/docGroups:create', { data })
+    if (!res.ok()) throw new Error(`createGroup failed: ${await res.text()}`)
+    const body = await res.json()
+    return body.data
+  }
+
+  async deleteGroup(id: number): Promise<void> {
+    await this.ctx.post(`/api/docGroups:destroy?filterByTk=${id}`).catch(() => {})
+  }
+
+  async listGroups(): Promise<any[]> {
+    const res = await this.ctx.get('/api/docGroups?pageSize=200')
+    const body = await res.json()
+    return body.data || []
+  }
+
   // ── Projects ──────────────────────────────────────────────────────────────
 
-  async createProject(data: { name: string; description?: string; githubRepo?: string }): Promise<any> {
+  async createProject(data: { name: string; description?: string; githubRepo?: string; groupId?: number }): Promise<any> {
     const res = await this.ctx.post('/api/docProjects', { data })
     if (!res.ok()) throw new Error(`createProject failed: ${await res.text()}`)
     const body = await res.json()
@@ -40,9 +75,10 @@ export class ApiHelper {
   }
 
   async listProjects(): Promise<any[]> {
-    const res = await this.ctx.get('/api/docProjects?pageSize=100')
+    const res = await this.ctx.get('/api/docProjects:list?pageSize=100')
+    if (!res.ok()) return []
     const body = await res.json()
-    return body.data?.data || body.data || []
+    return Array.isArray(body.data) ? body.data : (body.data?.data || [])
   }
 
   // ── Document Categories ────────────────────────────────────────────────────
@@ -64,6 +100,14 @@ export class ApiHelper {
     return body.data || []
   }
 
+  /** 依 projectId 查詢資料夾（後端 DocCategories 預設 pagination 容易漏，用 filter） */
+  async listCategoriesByProject(projectId: number): Promise<any[]> {
+    const filter = encodeURIComponent(JSON.stringify({ projectId }))
+    const res = await this.ctx.get(`/api/docCategories?pageSize=100&filter=${filter}`)
+    const body = await res.json()
+    return body.data || []
+  }
+
   // ── Documents ─────────────────────────────────────────────────────────────
 
   async createDocument(data: {
@@ -74,16 +118,65 @@ export class ApiHelper {
     typeId?: number
     status?: string
   }): Promise<any> {
+    // 後端強制 projectId+categoryId 必填；測試若未提供，自動補預設專案 + 第一個資料夾
+    let { projectId, categoryId } = data
+    if (!projectId || !categoryId) {
+      const defaults = await this.getDefaultProjectAndCategory()
+      projectId = projectId || defaults.projectId
+      categoryId = categoryId || defaults.categoryId
+    }
     const res = await this.ctx.post('/api/docDocuments', {
-      data: { status: 'published', ...data },
+      data: { status: 'published', ...data, projectId, categoryId },
     })
     if (!res.ok()) throw new Error(`createDocument failed: ${await res.text()}`)
     const body = await res.json()
     return body.data
   }
 
+  /** 給 createDocument 用的 fallback：抓第一個 project + 它底下的第一個 category */
+  private _defaultPC: { projectId: number; categoryId: number } | null = null
+  private async getDefaultProjectAndCategory(): Promise<{ projectId: number; categoryId: number }> {
+    if (this._defaultPC) return this._defaultPC
+    const projRes = await this.ctx.get('/api/docProjects:list?pageSize=1')
+    const projBody = await projRes.json()
+    const projects = projBody.data?.data || projBody.data || []
+    if (!projects.length) throw new Error('createDocument: 找不到任何 project，請先 seed')
+    const projectId = projects[0].id
+    const catRes = await this.ctx.get(`/api/docCategories:list?filter[projectId]=${projectId}&pageSize=1`)
+    const catBody = await catRes.json()
+    const cats = catBody.data?.data || catBody.data || []
+    if (!cats.length) throw new Error(`createDocument: project ${projectId} 沒有 category`)
+    this._defaultPC = { projectId, categoryId: cats[0].id }
+    return this._defaultPC
+  }
+
   async deleteDocument(id: number): Promise<void> {
     await this.ctx.delete(`/api/docDocuments/${id}`)
+  }
+
+  async getDocument(id: number): Promise<any> {
+    const res = await this.ctx.get(`/api/docDocuments:get?filterByTk=${id}&appends=viewers,editors,subscribers`)
+    if (!res.ok()) return null
+    const body = await res.json()
+    return body.data || null
+  }
+
+  /** 更新文件（支援 content、viewerIds、editorIds、subscriberIds 等） */
+  async updateDocument(id: number, data: {
+    title?: string
+    content?: string
+    status?: string
+    viewerIds?: number[]
+    editorIds?: number[]
+    subscriberIds?: number[]
+    skipConflictCheck?: boolean
+  }): Promise<any> {
+    const res = await this.ctx.post(`/api/docDocuments:update?filterByTk=${id}`, {
+      data: { skipConflictCheck: true, ...data },
+    })
+    if (!res.ok()) throw new Error(`updateDocument failed: ${res.status()} ${await res.text()}`)
+    const body = await res.json()
+    return body.data
   }
 
   async listDocuments(params: Record<string, string | number> = {}): Promise<any[]> {
@@ -171,6 +264,41 @@ export class ApiHelper {
     const res = await this.ctx.post(`/api/docDocuments:unlock?filterByTk=${id}`)
     const body = await res.json()
     return body.data ?? body
+  }
+
+  // ── Templates ─────────────────────────────────────────────────────────────
+
+  async createTemplate(data: {
+    name: string
+    description?: string
+    fields: Array<Record<string, any>>
+    listDisplayFields?: string[]
+    defaultCategoryId?: number | null
+    projectId?: number | null
+  }): Promise<any> {
+    const res = await this.ctx.post('/api/docTemplates:create', { data })
+    if (!res.ok()) throw new Error(`createTemplate failed: ${await res.text()}`)
+    const body = await res.json()
+    return body.data
+  }
+
+  async deleteTemplate(id: number): Promise<void> {
+    await this.ctx.post(`/api/docTemplates:destroy?filterByTk=${id}`).catch(() => {})
+  }
+
+  async listTemplates(): Promise<any[]> {
+    const res = await this.ctx.get('/api/docTemplates:list?pageSize=200')
+    const body = await res.json()
+    return body.data || []
+  }
+
+  // ── Versions ──────────────────────────────────────────────────────────────
+
+  async listVersions(docId: number): Promise<any[]> {
+    const res = await this.ctx.get(`/api/docDocuments:versions?filterByTk=${docId}`)
+    if (!res.ok()) return []
+    const body = await res.json()
+    return body.data || []
   }
 
   // ── Audit Logs ────────────────────────────────────────────────────────────

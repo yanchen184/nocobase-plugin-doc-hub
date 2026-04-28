@@ -24,8 +24,24 @@ test.describe('DocHub 文件 CRUD', () => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 
+    // 取得預設 project + category（後端強制必填）
+    const defaults = await page.evaluate(async () => {
+      const token = localStorage.getItem('NOCOBASE_TOKEN')
+      const projRes = await fetch('/api/docProjects:list?pageSize=1', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const projBody = await projRes.json()
+      const projectId = projBody.data?.data?.[0]?.id || projBody.data?.[0]?.id
+      const catRes = await fetch(`/api/docCategories:list?filter[projectId]=${projectId}&pageSize=1`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const catBody = await catRes.json()
+      const categoryId = catBody.data?.data?.[0]?.id || catBody.data?.[0]?.id
+      return { projectId, categoryId }
+    })
+
     const title = `${PREFIX} 新文件 ${Date.now()}`
-    const result = await page.evaluate(async (t) => {
+    const result = await page.evaluate(async ({ t, projectId, categoryId }) => {
       const token = localStorage.getItem('NOCOBASE_TOKEN')
       const res = await fetch('/api/docDocuments', {
         method: 'POST',
@@ -33,10 +49,10 @@ test.describe('DocHub 文件 CRUD', () => {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ title: t, content: '# 測試', status: 'draft' }),
+        body: JSON.stringify({ title: t, content: '# 測試', status: 'draft', projectId, categoryId }),
       })
       return res.json()
-    }, title)
+    }, { t: title, ...defaults })
 
     expect(result.data).toBeDefined()
     expect(result.data.id).toBeTruthy()
@@ -44,6 +60,29 @@ test.describe('DocHub 文件 CRUD', () => {
 
     cleanup.push(() => api.deleteDocument(result.data.id))
     await page.screenshot({ path: 'artifacts/03-create-doc.png' })
+  })
+
+  test('缺 projectId / categoryId 應該被擋', async ({ page }) => {
+    await loginAsAdmin(page)
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+
+    const responses = await page.evaluate(async () => {
+      const token = localStorage.getItem('NOCOBASE_TOKEN')
+      const post = (body: any) => fetch('/api/docDocuments', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(async (r) => ({ status: r.status, body: await r.json() }))
+      const noProject = await post({ title: 'no-proj', status: 'draft' })
+      const noCategory = await post({ title: 'no-cat', status: 'draft', projectId: 1 })
+      return { noProject, noCategory }
+    })
+
+    expect(responses.noProject.status).toBe(400)
+    expect(JSON.stringify(responses.noProject.body)).toContain('專案')
+    expect(responses.noCategory.status).toBe(400)
+    expect(JSON.stringify(responses.noCategory.body)).toContain('資料夾')
   })
 
   test('可以讀取文件詳情', async ({ page }) => {

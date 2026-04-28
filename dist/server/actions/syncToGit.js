@@ -27,7 +27,9 @@ exports.syncToGit = async function syncToGit(ctx, next) {
   const branch = doc.githubBranch || 'master';
   const fileContent = doc.content || '';
   const contentBase64 = Buffer.from(fileContent, 'utf-8').toString('base64');
-  const editorName = ctx.state?.currentUser?.nickname || ctx.state?.currentUser?.email || 'NocoBase';
+  const cu = ctx.state?.currentUser || {};
+  const editorName = cu.nickname || cu.username || cu.email || 'NocoBase';
+  const editorEmail = cu.email || `${cu.username || 'nocobase'}@dochub.local`;
 
   let newSha = null;
 
@@ -66,6 +68,8 @@ exports.syncToGit = async function syncToGit(ctx, next) {
       content: contentBase64,
       encoding: 'base64',
       commit_message: `docs: update ${filePath} by ${editorName}`,
+      author_name: editorName,
+      author_email: editorEmail,
     });
 
     const putResult = await new Promise((resolve, reject) => {
@@ -134,6 +138,8 @@ exports.syncToGit = async function syncToGit(ctx, next) {
       message: `docs: update ${filePath} by ${editorName}`,
       content: contentBase64,
       branch,
+      author: { name: editorName, email: editorEmail },
+      committer: { name: editorName, email: editorEmail },
     };
     if (existingSha) commitBody.sha = existingSha;
 

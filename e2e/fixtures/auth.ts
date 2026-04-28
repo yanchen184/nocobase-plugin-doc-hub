@@ -22,6 +22,35 @@ export const MEMBER_B_CREDENTIALS: UserCredentials = {
   password: process.env.MEMBER_B_PASSWORD || 'memberb123',
 }
 
+// ── 手冊專用角色帳號（4 種權限角色示範）─────────────────────────────
+export const MANUAL_VIEWER: UserCredentials = {
+  account: 'manual_viewer@dochub.local',
+  password: 'Manual1234!',
+}
+export const MANUAL_EDITOR: UserCredentials = {
+  account: 'manual_editor@dochub.local',
+  password: 'Manual1234!',
+}
+export const MANUAL_SUBSCRIBER: UserCredentials = {
+  account: 'manual_subscriber@dochub.local',
+  password: 'Manual1234!',
+}
+export const MANUAL_OUTSIDER: UserCredentials = {
+  account: 'manual_outsider@dochub.local',
+  password: 'Manual1234!',
+}
+
+// 便利 map，讓 spec 可以這樣用：await loginAs(page, USERS.viewer)
+export const USERS = {
+  admin: ADMIN_CREDENTIALS,
+  viewer: MANUAL_VIEWER,
+  editor: MANUAL_EDITOR,
+  subscriber: MANUAL_SUBSCRIBER,
+  outsider: MANUAL_OUTSIDER,
+} as const
+
+export type UserRole = keyof typeof USERS
+
 /**
  * Get auth token via API (no browser needed)
  */

@@ -1,3 +1,8 @@
 node_modules/
 *.log
 .DS_Store
+
+# Playwright artifacts（截圖、test results、video、trace）
+e2e/artifacts/
+e2e/test-results/
+e2e/playwright-report/

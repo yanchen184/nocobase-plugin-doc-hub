@@ -57,8 +57,10 @@ test.describe('DocHub 專案層級權限隔離', () => {
     if (!memberB) throw new Error(`無法取得或建立測試帳號 ${MEMBER_B_CREDENTIALS.account}`)
     memberBId = memberB.id
 
-    // 建立一個有權限限制的專案
-    const proj = await adminApi.createProject({ name: `${PREFIX} 私有專案` })
+    // 建立一個有權限限制的專案（server 強制 groupId 必填）
+    const groups = await adminApi.listGroups()
+    const grp = groups.find((g: any) => g.name === '專案') || groups[0]
+    const proj = await adminApi.createProject({ name: `${PREFIX} 私有專案`, groupId: grp.id })
     projectId = proj.id
     cleanup.push(() => adminApi.deleteProject(projectId))
 

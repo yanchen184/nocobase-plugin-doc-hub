@@ -49,5 +49,13 @@ module.exports = (0, import_database.defineCollection)({
       foreignKey: 'documentId',
       otherKey: 'userId',
     },
+    {
+      type: 'belongsToMany',
+      name: 'tags',
+      target: 'docTags',
+      through: 'docDocumentTags',
+      foreignKey: 'documentId',
+      otherKey: 'tagId',
+    },
   ],
 });

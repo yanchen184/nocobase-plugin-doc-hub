@@ -282,23 +282,30 @@ test.beforeAll(async () => {
   api = await ApiHelper.create()
   cleanup = new CleanupStack()
 
-  // ─ 建立專案 ─────────────────────────────────────────────────────────────
+  // ─ 建立專案（server 強制 groupId 必填）─────────────────────────────────
+  const groups = await api.listGroups()
+  const projectGroup = groups.find((g: any) => g.name === '專案') || groups[0]
+  const groupId = projectGroup?.id
+
   const p1 = await api.createProject({
     name: 'wez-spring-boot-starters',
     description: '企業級 Spring Boot Starter 元件庫，涵蓋安全性、多資料源、稽核日誌、通知等模組。',
     githubRepo: '10.1.2.191/wezoomtek/wez-spring-boot-starters',
+    groupId,
   }).catch(() => null)
   if (p1?.id) { proj1Id = p1.id; cleanup.push(() => api.deleteProject(proj1Id)) }
 
   const p2 = await api.createProject({
     name: '產品操作手冊',
     description: '各產品線的使用者手冊與快速上手指南。',
+    groupId,
   }).catch(() => null)
   if (p2?.id) { proj2Id = p2.id; cleanup.push(() => api.deleteProject(proj2Id)) }
 
   const p3 = await api.createProject({
     name: '內部 SOP',
     description: '人資、IT、財務部門的標準作業流程文件。',
+    groupId,
   }).catch(() => null)
   if (p3?.id) { proj3Id = p3.id; cleanup.push(() => api.deleteProject(proj3Id)) }
 
