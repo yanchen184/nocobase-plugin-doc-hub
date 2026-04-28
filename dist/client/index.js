@@ -855,19 +855,20 @@ function DocSidebar(props){
         h(Input.TextArea,{value:newProjDesc,onChange:function(e){setNewProjDesc(e.target.value);},
           placeholder:'簡短描述此專案的用途...',rows:2,size:'large'})
       ),
-      // 初始資料夾（共用群組下的專案不自動建子資料夾）
+      // 初始資料夾：只有「專案/Project」群組才套 SDLC，其他群組（共用知識庫、制度規定等）視為頂層分類
       (function(){
         var pickedGroup=(groups||[]).find(function(g){return g.id===selectedProjGroupId;});
-        var isShared=pickedGroup&&/共用|shared/i.test(pickedGroup.name||'');
-        if(isShared){
+        var isProjectGroup=pickedGroup&&/專案|project/i.test(pickedGroup.name||'');
+        if(!isProjectGroup){
+          var groupLabel=(pickedGroup&&pickedGroup.name)||'此群組';
           return h('div',null,
-            h('div',{style:{fontSize:13,fontWeight:600,color:'#1e293b',marginBottom:8}},'初始資料夾結構（共用知識庫）'),
+            h('div',{style:{fontSize:13,fontWeight:600,color:'#1e293b',marginBottom:8}},'初始資料夾結構（'+groupLabel+'）'),
             h('div',{style:{
               background:'#f0f9ff',borderRadius:8,border:'1px dashed #93c5fd',
               padding:'14px 16px',fontSize:13,color:'#1e40af',lineHeight:1.6
             }},
               h('div',{style:{fontWeight:600,marginBottom:4}},'ℹ️ 此專案將作為「頂層分類」'),
-              '共用群組下的專案不自動建立子資料夾，',h('br'),
+              '非「專案」群組底下的項目不自動建立子資料夾，',h('br'),
               '建立後可自行新增所需的資料夾結構。'
             )
           );
